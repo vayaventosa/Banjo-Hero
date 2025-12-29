@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Banjo Fretboard">
+    <title>Gold Tone Cello Banjo Fretboard</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+```
+<script type="text/babel">
+    const { useState } = React;
+
+    // Music icon component
+    const Music = ({ className }) => (
+        <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18V5l12-2v13"></path>
+            <circle cx="6" cy="18" r="3"></circle>
+            <circle cx="18" cy="16" r="3"></circle>
+        </svg>
+    );
+
+    // Main component - paste your entire component code here
+    const CelloBanjoFretboard = () => {
+      const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      
+      const defaultTunings = {
+        'Open G (gDGBD)': ['G2', 'D2', 'G2', 'B2', 'D3'],
+        'Open A (aEAC#E)': ['A2', 'E2', 'A2', 'C#3', 'E3'],
+        'Open C (gCGCE)': ['G2', 'C2', 'G2', 'C3', 'E3'],
+        'Open D (aDADE)': ['A2', 'D2', 'A2', 'D3', 'E3'],
+      };
+
+      const [tunings, setTunings] = useState(defaultTunings);
+      const [selectedTuning, setSelectedTuning] = useState('Open G (gDGBD)');
+      const [selectedNotes, setSelectedNotes] = useState([]);
+      const [customTuningName, setCustomTuningName] = useState('');
+      const [customTuningNotes, setCustomTuningNotes] = useState(['G2', 'D2', 'G2', 'B2', 'D3']);
+      const [showCustomTuning, setShowCustomTuning] = useState(false);
+      const [chordLookup, setChordLookup] = useState('');
+      const [highlightedNotes, setHighlightedNotes] = useState([]);
+      const [selectedKey, setSelectedKey] = useState('');
+      const [selectedScale, setSelectedScale] = useState('major');
+      const [spikeCapoFrets, setSpikeCapoFrets] = useState([7, 9, 12]);
+      const numFrets = 22;
+
+      const scaleIntervals = {
+        'major': [0, 2, 4, 5, 7, 9, 11],
+        'minor': [0, 2, 3, 5, 7, 8, 10],
+        'harmonic minor': [0, 2, 3, 5, 7, 8, 11],
+        'melodic minor': [0, 2, 3, 5, 7, 9, 11],
+        'dorian': [0, 2, 3, 5, 7, 9, 10],
+        'mixolydian': [0, 2, 4, 5, 7, 9, 10],
+      };
+
+      const getNotesInKey = (root, scale) => {
+        if (!root) return [];
+        const rootIdx = notes.indexOf(root);
+        const intervals = scaleIntervals[scale];
+        return intervals.map(interval => notes[(rootIdx + interval) % 12]);
+      };
+
+      const getChordsInKey = (root, scale) => {
+        if (!root) return [];
+        const scaleNotes = getNotesInKey(root, scale);
+        const chords = [];
+        
+        const chordQualities = scale === 'major' 
+          ? ['maj', 'min', 'min', 'maj', 'maj', 'min', 'dim']
+          : ['min', 'dim', 'maj', 'min', 'min', 'maj', 'maj'];
+        
+        scaleNotes.forEach((note, idx) => {
+          chords.push({
+            root: note,
+            quality: chordQualities[idx],
+            numeral: scale === 'major' 
+              ? ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'][idx]
+              : ['i', 'ii°', 'III', 'iv', 'v', 'VI', 'VII'][idx]
+          });
+        });
+        
+        return chords;
+      };
+
+      const handleKeyChange = (root) => {
+        setSelectedKey(root);
+        if (root) {
+          const keyNotes = getNotesInKey(root, selectedScale);
+          setHighlightedNotes(keyNotes);
+          setChordLookup('');
+        } else {
+          setHighlightedNotes([]);
+        }
+      };
+
+      const handleScaleChange = (scale) => {
+        setSelectedScale(scale);
+        if (selectedKey) {
+          const keyNotes = getNotesInKey(selectedKey, scale);
+          setHighlightedNotes(keyNotes);
+        }
+      };
+
+      const selectChordFromKey = (chord) => {
+        const chordNotes = parseChord(`${chord.root}${chord.quality}`);
+        if (chordNotes) {
+          setHighlightedNotes(chordNotes);
+          setChordLookup(`${chord.root}${chord.quality}`);
+        }
+      };
+
+      const getSpikeCapoSuggestion = () => {
+        const currentTuning = tunings[selectedTuning];
+        const droneStringIdx = 0;
+        
+        const droneSelections = selectedNotes
+          .filter(key => key.startsWith(`${droneStringIdx}-`))
+          .map(key => parseInt(key.split('-')[1]));
+        
+        if (droneSelections.length === 0) return null;
+        
+        const maxFret = Math.max(...droneSelections);
+        const targetSpike = maxFret + 2;
+        const closestSpike = spikeCapoFrets.find(spike => spike >= targetSpike);
+        
+        if (closestSpike && maxFret >= 5) {
+          const actualFret = maxFret - 5;
+          const noteData = getNoteAtFret(currentTuning[droneStringIdx], actualFret);
+          return {
+            fret: closestSpike,
+            targetFret: maxFret,
+            note: noteData.note
+          };
+        }
+        
+        return null;
+      };
+
+      const getNoteFromString = (noteStr) => {
+        const note = noteStr.slice(0, -1);
+        const octave = parseInt(noteStr.slice(-1));
+        return { note, octave };
+      };
+
+      const getNoteAtFret = (stringNote, fret) => {
+        const { note, octave } = getNoteFromString(stringNote);
+        const noteIndex = notes.indexOf(note);
+        const newNoteIndex = (noteIndex + fret) % 12;
+        const octaveShift = Math.floor((noteIndex + fret) / 12);
+        return { note: notes[newNoteIndex], octave: octave + octaveShift };
+      };
+
+      const toggleNote = (stringIdx, fret) => {
+        const key = `${stringIdx}-${fret}`;
+        setSelectedNotes(prev => 
+          prev.includes(key) 
+            ? prev.filter(n => n !== key)
+            : [...prev, key]
+        );
+      };
+
+      const clearSelection = () => {
+        setSelectedNotes([]);
+      };
+
+      const parseChord = (chordStr) => {
+        const chordPatterns = {
+          'maj': [0, 4, 7],
+          'major': [0, 4, 7],
+          'm': [0, 3, 7],
+          'min': [0, 3, 7],
+          'minor': [0, 3, 7],
+          'dim': [0, 3, 6],
+          'aug': [0, 4, 8],
+          'maj7': [0, 4, 7, 11],
+          'm7': [0, 3, 7, 10],
+          'min7': [0, 3, 7, 10],
+          '7': [0, 4, 7, 10],
+          'dom7': [0, 4, 7, 10],
+          'sus2': [0, 2, 7],
+          'sus4': [0, 5, 7],
+        };
+
+        const input = chordStr.trim().toLowerCase();
+        if (!input) return null;
+
+        let root = input[0].toUpperCase();
+        let remaining = input.slice(1);
+        
+        if (remaining[0] === '#' || remaining[0] === 'b') {
+          if (remaining[0] === 'b') {
+            const noteIdx = notes.indexOf(root);
+            root = notes[(noteIdx - 1 + 12) % 12];
+          } else {
+            root = root + '#';
+          }
+          remaining = remaining.slice(1);
+        }
+
+        if (!notes.includes(root)) return null;
+
+        const chordType = remaining.trim() || 'major';
+        const intervals = chordPatterns[chordType];
+        if (!intervals) return null;
+
+        const rootIdx = notes.indexOf(root);
+        const chordNotes = intervals.map(interval => notes[(rootIdx + interval) % 12]);
+        
+        return chordNotes;
+      };
+
+      const handleChordLookup = () => {
+        const chordNotes = parseChord(chordLookup);
+        if (chordNotes) {
+          setHighlightedNotes(chordNotes);
+          setSelectedNotes([]);
+        }
+      };
+
+      const clearChordHighlight = () => {
+        setHighlightedNotes([]);
+        setChordLookup('');
+        setSelectedKey('');
+      };
+
+      const addCustomTuning = () => {
+        if (!customTuningName.trim()) {
+          alert('Please enter a tuning name');
+          return;
+        }
+        
+        const isValid = customTuningNotes.every(note => {
+          const match = note.match(/^([A-G]#?)(\d)$/);
+          return match && notes.includes(match[1]) && parseInt(match[2]) >= 0 && parseInt(match[2]) <= 8;
+        });
+
+        if (!isValid) {
+          alert('Invalid tuning format. Use format like G2, D2, G2, B2, D3');
+          return;
+        }
+
+        const newTunings = { ...tunings, [customTuningName]: customTuningNotes };
+        setTunings(newTunings);
+        setSelectedTuning(customTuningName);
+        setShowCustomTuning(false);
+        setCustomTuningName('');
+      };
+
+      const updateCustomNote = (idx, value) => {
+        const newNotes = [...customTuningNotes];
+        newNotes[idx] = value.toUpperCase();
+        setCustomTuningNotes(newNotes);
+      };
+
+      const getSelectedNoteNames = () => {
+        const currentTuning = tunings[selectedTuning];
+        return selectedNotes.map(key => {
+          const [stringIdx, fret] = key.split('-').map(Number);
+          const isFirstString = stringIdx === 0;
+          const actualFret = isFirstString ? fret - 5 : fret;
+          const noteData = getNoteAtFret(currentTuning[stringIdx], actualFret);
+          return noteData.note;
+        }).filter((note, idx, arr) => arr.indexOf(note) === idx).sort((a, b) => 
+          notes.indexOf(a) - notes.indexOf(b)
+        );
+      };
+
+      const identifyChord = () => {
+        const selectedUniqueNotes = getSelectedNoteNames();
+        if (selectedUniqueNotes.length < 3) return 'Select at least 3 notes';
+
+        const chordPatterns = {
+          'Major': [0, 4, 7],
+          'Minor': [0, 3, 7],
+          'Diminished': [0, 3, 6],
+          'Augmented': [0, 4, 8],
+          'Major 7': [0, 4, 7, 11],
+          'Minor 7': [0, 3, 7, 10],
+          'Dominant 7': [0, 4, 7, 10],
+          'Sus2': [0, 2, 7],
+          'Sus4': [0, 5, 7],
+        };
+
+        for (let rootIdx = 0; rootIdx < 12; rootIdx++) {
+          const root = notes[rootIdx];
+          for (const [chordType, intervals] of Object.entries(chordPatterns)) {
+            const chordNotes = intervals.map(interval => notes[(rootIdx + interval) % 12]);
+            if (chordNotes.every(note => selectedUniqueNotes.includes(note)) &&
+                chordNotes.length === selectedUniqueNotes.length) {
+              return `${root} ${chordType}`;
+            }
+          }
+        }
+        return selectedUniqueNotes.join(', ');
+      };
+
+      const fretMarkers = [3, 5, 7, 10, 12, 15, 17, 19, 21];
+      const doubleDots = [12];
+
+      const commonProgressions = {
+        'major': [
+          { name: 'I-IV-V', chords: [0, 3, 4], description: 'Classic rock/blues' },
+          { name: 'I-V-vi-IV', chords: [0, 4, 5, 3], description: 'Pop progression' },
+          { name: 'ii-V-I', chords: [1, 4, 0], description: 'Jazz turnaround' },
+          { name: 'I-vi-IV-V', chords: [0, 5, 3, 4], description: '50s progression' },
+          { name: 'I-IV-I-V', chords: [0, 3, 0, 4], description: 'Folk/country' },
+        ],
+        'minor': [
+          { name: 'i-iv-v', chords: [0, 3, 4], description: 'Minor blues' },
+          { name: 'i-VI-VII', chords: [0, 5, 6], description: 'Andalusian cadence' },
+          { name: 'i-iv-VII-VI', chords: [0, 3, 6, 5], description: 'Rock minor' },
+          { name: 'i-III-VII-VI', chords: [0, 2, 6, 5], description: 'Epic progression' },
+        ],
+      };
+
+      const songExamples = {
+        'C': { major: ['Let It Be - Beatles', 'No Woman No Cry - Bob Marley', 'Imagine - John Lennon'], minor: ['Stairway to Heaven - Led Zeppelin', 'Losing My Religion - R.E.M.'] },
+        'C#': { major: ['Drops of Jupiter - Train'], minor: [] },
+        'D': { major: ['Wonderwall - Oasis', 'Free Fallin\' - Tom Petty', 'Blowin\' in the Wind - Bob Dylan'], minor: ['Scarborough Fair - Simon & Garfunkel', 'Zombie - The Cranberries'] },
+        'D#': { major: [], minor: ['Hurt - Johnny Cash'] },
+        'E': { major: ['Hey Jude - Beatles', 'Love Me Do - Beatles', 'Wagon Wheel - OCMS'], minor: ['Losing My Religion - R.E.M.', 'Sultans of Swing - Dire Straits'] },
+        'F': { major: ['I Will Always Love You - Whitney Houston', 'Hey Soul Sister - Train'], minor: ['All Along the Watchtower - Hendrix'] },
+        'F#': { major: ['Mr. Brightside - The Killers'], minor: ['Creep - Radiohead'] },
+        'G': { major: ['Sweet Home Alabama - Lynyrd Skynyrd', 'Knockin\' on Heaven\'s Door - Bob Dylan', 'Brown Eyed Girl - Van Morrison'], minor: ['While My Guitar Gently Weeps - Beatles'] },
+        'G#': { major: [], minor: ['Rolling in the Deep - Adele'] },
+        'A': { major: ['Free Bird - Lynyrd Skynyrd', 'I\'m Yours - Jason Mraz', 'You Are My Sunshine'], minor: ['Stairway to Heaven - Led Zeppelin', 'Hotel California - Eagles'] },
+        'A#': { major: [], minor: [] },
+        'B': { major: [], minor: [] },
+      };
+
+      return (
+        <div className="w-full max-w-6xl mx-auto p-6 bg-gradient-to-br from-orange-100 via-amber-50 to-cyan-100">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 border-4 border-orange-200">
+            <div className="flex items-center gap-3 mb-6 pb-4 border-b-2 border-orange-200">
+              <Music className="w-8 h-8 text-orange-600" />
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-orange-600 to-pink-500 bg-clip-text text-transparent">Gold Tone Cello Banjo</h1>
+            </div>
+
+            <div className="mb-6 flex gap-4 items-center flex-wrap">
+              <div>
+                <label className="block text-sm font-semibold text-orange-800 mb-2">Tuning:</label>
+                <select 
+                  value={selectedTuning}
+                  onChange={(e) => {
+                    setSelectedTuning(e.target.value);
+                    setSelectedNotes([]);
+                    setHighlightedNotes([]);
+                  }}
+                  className="px-4 py-2 border-2 border-orange-300 rounded-xl bg-white text-gray-800 font-medium shadow-sm hover:shadow-md transition-shadow"
+                >
+                  {Object.keys(tunings).map(tuning => (
+                    <option key={tuning} value={tuning}>{tuning}</option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                onClick={() => setShowCustomTuning(!showCustomTuning)}
+                className="px-4 py-2 bg-gradient-to-r from-orange-400 to-pink-400 text-white rounded-xl hover:from-orange-500 hover:to-pink-500 font-medium mt-6 shadow-md hover:shadow-lg transition-all"
+              >
+                {showCustomTuning ? 'Cancel' : 'Add Custom Tuning'}
+              </button>
+              
+              <button
+                onClick={clearSelection}
+                className="px-4 py-2 bg-gradient-to-r from-red-400 to-rose-400 text-white rounded-xl hover:from-red-500 hover:to-rose-500 font-medium mt-6 shadow-md hover:shadow-lg transition-all"
+              >
+                Clear Selection
+              </button>
+
+              <div className="mt-6">
+                <label className="block text-sm font-semibold text-orange-800 mb-2">
+                  Spike Capo Frets (for drone string):
+                </label>
+                <div className="flex gap-2">
+                  {[5, 7, 9, 10, 12, 14, 15, 17, 19].map(fret => (
+                    <button
+                      key={fret}
+                      onClick={() => {
+                        setSpikeCapoFrets(prev => 
+                          prev.includes(fret) 
+                            ? prev.filter(f => f !== fret)
+                            : [...prev, fret].sort((a, b) => a - b)
+                        );
+                      }}
+                      className={`px-3 py-1 rounded-lg ${
+                        spikeCapoFrets.includes(fret)
+                          ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md'
+                          : 'bg-orange-100 text-orange-800 border border-orange-300'
+                      } text-sm font-medium hover:opacity-80 transition-all`}
+                    >
+                      {fret}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {showCustomTuning && (
+              <div className="mb-6 p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-300 rounded-xl shadow-md">
+                <h3 className="font-semibold text-orange-900 mb-3">Add Custom Tuning</h3>
+                <div className="mb-3">
+                  <label className="block text-sm font-semibold text-orange-800 mb-1">Tuning Name:</label>
+                  <input
+                    type="text"
+                    value={customTuningName}
+                    onChange={(e) => setCustomTuningName(e.target.value)}
+                    placeholder="e.g., My Custom Tuning"
+                    className="px-3 py-2 border-2 border-orange-300 rounded-xl w-full max-w-xs"
+                  />
+                </div>
+                <div className="mb-3">
+                  <label className="block text-sm font-semibold text-orange-800 mb-1">Strings (format: G2, D2, G2, B2, D3):</label>
+                  <div className="flex gap-2 flex-wrap">
+                    {customTuningNotes.map((note, idx) => (
+                      <input
+                        key={idx}
+                        type="text"
+                        value={note}
+                        onChange={(e) => updateCustomNote(idx, e.target.value)}
+                        className="px-3 py-2 border-2 border-orange-300 rounded-xl w-16 text-center"
+                        placeholder={`String ${idx + 1}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={addCustomTuning}
+                  className="px-4 py-2 bg-gradient-to-r from-teal-400 to-cyan-500 text-white rounded-xl hover:from-teal-500 hover:to-cyan-600 font-medium shadow-md hover:shadow-lg transition-all"
+                >
+                  Add Tuning
+                </button>
+              </div>
+            )}
+
+            <div className="mb-6 p-4 bg-gradient-to-r from-cyan-50 to-teal-50 border-2 border-cyan-300 rounded-xl shadow-md">
+              <h3 className="font-semibold text-cyan-900 mb-3">Chord Lookup</h3>
+              <div className="flex gap-3 items-end flex-wrap">
+                <div>
+                  <label className="block text-sm font-semibold text-cyan-800 mb-1">
+                    Enter Chord (e.g., Cmaj, Dm, G7, Asus4):
+                  </label>
+                  <input
+                    type="text"
+                    value={chordLookup}
+                    onChange={(e) => setChordLookup(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleChordLookup()}
+                    placeholder="Cmaj"
+                    className="px-3 py-2 border-2 border-cyan-300 rounded-xl w-48"
+                  />
+                </div>
+                <button
+                  onClick={handleChordLookup}
+                  className="px-4 py-2 bg-gradient-to-r from-cyan-400 to-teal-500 text-white rounded-xl hover:from-cyan-500 hover:to-teal-600 font-medium shadow-md hover:shadow-lg transition-all"
+                >
+                  Find Chord
+                </button>
+                {highlightedNotes.length > 0 && (
+                  <button
+                    onClick={clearChordHighlight}
+                    className="px-4 py-2 bg-gradient-to-r from-gray-400 to-gray-500 text-white rounded-xl hover:from-gray-500 hover:to-gray-600 font-medium shadow-md hover:shadow-lg transition-all"
+                  >
+                    Clear Highlight
+                  </button>
+                )}
+              </div>
+              {highlightedNotes.length > 0 && !selectedKey && (
+                <div className="mt-3 text-cyan-800 font-medium">
+                  Highlighting: {highlightedNotes.join(', ')}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6 p-4 bg-gradient-to-r from-pink-50 to-rose-50 border-2 border-pink-300 rounded-xl shadow-md">
+              <h3 className="font-semibold text-pink-900 mb-3">Key Selector</h3>
+              <div className="flex gap-3 items-end flex-wrap mb-3">
+                <div>
+                  <label className="block text-sm font-semibold text-pink-800 mb-1">Key:</label>
+                  <select
+                    value={selectedKey}
+                    onChange={(e) => handleKeyChange(e.target.value)}
+                    className="px-3 py-2 border-2 border-pink-300 rounded-xl bg-white shadow-sm"
+                  >
+                    <option value="">Select a key...</option>
+                    {notes.map(note => (
+                      <option key={note} value={note}>{note}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-pink-800 mb-1">Scale:</label>
+                  <select
+                    value={selectedScale}
+                    onChange={(e) => handleScaleChange(e.target.value)}
+                    className="px-3 py-2 border-2 border-pink-300 rounded-xl bg-white shadow-sm"
+                  >
+                    {Object.keys(scaleIntervals).map(scale => (
+                      <option key={scale} value={scale}>{scale.charAt(0).toUpperCase() + scale.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              {selectedKey && (
+                <>
+                  <div className="mb-3">
+                    <div className="font-semibold text-pink-900 mb-1">Notes in {selectedKey} {selectedScale}:</div>
+                    <div className="text-pink-800 font-medium">{getNotesInKey(selectedKey, selectedScale).join(', ')}</div>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className="font-semibold text-pink-900 mb-2">Chords in {selectedKey} {selectedScale}:</div>
+                    <div className="flex gap-2 flex-wrap">
+                      {getChordsInKey(selectedKey, selectedScale).map((chord, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => selectChordFromKey(chord)}
+                          className="px-3 py-2 bg-gradient-to-br from-pink-200 to-rose-200 hover:from-pink-300 hover:to-rose-300 rounded-xl border-2 border-pink-400 transition-all shadow-sm hover:shadow-md"
+                        >
+                          <div className="text-xs text-pink-600 font-semibold">{chord.numeral}</div>
+                          <div className="text-sm font-bold text-pink-900">{chord.root}{chord.quality}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {commonProgressions[selectedScale] && (
+                    <div className="mb-4 p-3 bg-gradient-to-r from-pink-100 to-rose-100 rounded-xl border border-pink-200">
+                      <div className="font-semibold text-pink-900 mb-2">Common Progressions:</div>
+                      {commonProgressions[selectedScale].map((prog, idx) => {
+                        const chordNames = prog.chords.map(i => {
+                          const chord = getChordsInKey(selectedKey, selectedScale)[i];
+                          return `${chord.root}${chord.quality}`;
+                        }).join(' - ');
+                        return (
+                          <div key={idx} className="mb-2 text-sm">
+                            <span className="font-semibold text-pink-800">{prog.name}:</span>{' '}
+                            <span className="text-pink-700">{chordNames}</span>{' '}
+                            <span className="text-pink-600 italic">({prog.description})</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {songExamples[selectedKey] && songExamples[selectedKey][selectedScale].length > 0 && (
+                    <div className="p-3 bg-gradient-to-r from-pink-100 to-rose-100 rounded-xl border border-pink-200">
+                      <div className="font-semibold text-pink-900 mb-2">Songs in {selectedKey} {selectedScale}:</div>
+                      <div className="text-sm text-pink-700 font-medium">
+                        {songExamples[selectedKey][selectedScale].join(' • ')}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300 rounded-xl shadow-md">
+              <div className="font-semibold text-orange-900 mb-2">Selected Notes:</div>
+              <div className="text-lg text-orange-800 font-medium">{getSelectedNoteNames().join(', ') || 'None'}</div>
+              <div className="font-semibold text-orange-900 mt-2">Chord:</div>
+              <div className="text-lg text-orange-800 font-medium">{identifyChord()}</div>
+              {getSpikeCapoSuggestion() && (
+                <div className="mt-3 p-3 bg-gradient-to-r from-yellow-100 to-orange-100 rounded-xl border-2 border-yellow-400 shadow-sm">
+                  <div className="font-semibold text-orange-900">🎯 Spike Capo Suggestion:</div>
+                  <div className="text-orange-800 font-medium">
+                    Use spike at fret {getSpikeCapoSuggestion().fret} to reach {getSpikeCapoSuggestion().note} at fret {getSpikeCapoSuggestion().targetFret}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="overflow-x-auto">
+              <div className="inline-block min-w-full">
+                {/* Fret markers */}
+                <div className="flex mb-2">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => (
+                    <div key={fret} className="w-12 text-center">
+                      {fretMarkers.includes(fret) && (
+                        <div className="flex justify-center gap-1">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                          {doubleDots.includes(fret) && (
+                            <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Fretboard */}
+                {[...tunings[selectedTuning]].reverse().map((stringNote, reversedIdx) => {
+                  const stringIdx = tunings[selectedTuning].length - 1 - reversedIdx;
+                  const isFirstString = stringIdx === 0;
+                  const startFret = isFirstString ? 5 : 0;
+                  
+                  return (
+                    <div key={stringIdx} className="flex items-center mb-1">
+                      <div className="w-24 text-right pr-4 font-semibold text-gray-700">
+                        {stringNote}
+                      </div>
+                      {[...Array(numFrets + 1)].map((_, fret) => {
+                        if (isFirstString && fret < startFret) {
+                          return (
+                            <div key={fret} className="relative w-12 h-12">
+                              <div className="w-full h-full border-r-2 border-transparent"></div>
+                            </div>
+                          );
+                        }
+                        
+                        const actualFret = isFirstString ? fret - startFret : fret;
+                        const noteData = getNoteAtFret(stringNote, actualFret);
+                        const isSelected = selectedNotes.includes(`${stringIdx}-${fret}`);
+                        const isHighlighted = highlightedNotes.includes(noteData.note);
+                        return (
+                          <div key={fret} className="relative w-12 h-12">
+                            <button
+                              onClick={() => toggleNote(stringIdx, fret)}
+                              className={`w-full h-full border-r-2 border-orange-300 relative ${
+                                isSelected 
+                                  ? 'bg-gradient-to-br from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 shadow-md' 
+                                  : isHighlighted
+                                  ? 'bg-gradient-to-br from-cyan-300 to-teal-400 hover:from-cyan-400 hover:to-teal-500 shadow-md'
+                                  : 'bg-gradient-to-br from-orange-50 to-amber-50 hover:from-orange-100 hover:to-amber-100'
+                              } transition-all rounded-sm`}
+                            >
+                              <span className={`text-xs font-semibold ${
+                                isSelected || isHighlighted ? 'text-white drop-shadow' : 'text-gray-700'
+                              }`}>
+                                {noteData.note}
+                              </span>
+                            </button>
+                            {fret < numFrets && (
+                              <div className={`absolute top-1/2 left-full w-0 h-0.5 ${
+                                stringIdx === 0 ? 'bg-orange-300' :
+                                stringIdx === 1 ? 'bg-orange-400' :
+                                stringIdx === 2 ? 'bg-orange-500' :
+                                stringIdx === 3 ? 'bg-orange-600' :
+                                'bg-orange-700'
+                              }`} style={{ width: '3rem', transform: 'translateY(-50%)' }}></div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+                {/* Fret numbers */}
+                <div className="flex mt-2">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => (
+                    <div key={fret} className="w-12 text-center text-xs text-gray-500 font-medium">
+                      {fret}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Spike capo markers */}
+                <div className="flex mt-1">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => (
+                    <div key={fret} className="w-12 text-center">
+                      {spikeCapoFrets.includes(fret) && (
+                        <div className="text-base font-bold text-pink-600 drop-shadow">▲</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Render the app
+    ReactDOM.render(<CelloBanjoFretboard />, document.getElementById('root'));
+</script>
+```
+
+</body>
+</html>
