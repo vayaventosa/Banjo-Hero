@@ -56,14 +56,14 @@
       const defaultTunings = {
         'Open G (gDGBD)': ['G2', 'D2', 'G2', 'B2', 'D3'],
         'Sawmill (gDGCD)': ['G2', 'D2', 'G2', 'C3', 'D3'],
-        'Open A (G→A)': ['G2', 'E2', 'A2', 'C#3', 'E3'],
+        'Open A (gEAC#E)': ['G2', 'E2', 'A2', 'C#3', 'E3'],
         'Open C (gCGCE)': ['G2', 'C2', 'G2', 'C3', 'E3'],
-        'Open D (G→D)': ['G2', 'D2', 'A2', 'D3', 'F#3'],
+        'Open D (gDADF#)': ['G2', 'D2', 'A2', 'D3', 'F#3'],
       };
 
       const tuningNotes = {
-        'Open A (G→A)': 'Spike capo G string at fret 9 to reach A',
-        'Open D (G→D)': 'Spike capo G string at fret 7 to reach D',
+        'Open A (gEAC#E)': 'Spike capo G string at fret 9 to reach A',
+        'Open D (gDADF#)': 'Spike capo G string at fret 7 to reach D',
       };
 
       // Calculate which fret the drone string needs to be spiked to (if higher than G)
@@ -86,6 +86,142 @@
         };
       };
 
+      // Tuner functionality
+      let audioContext = null;
+      let analyser = null;
+      let microphone = null;
+      let rafId = null;
+
+      const noteFrequencies = {
+        'C': 16.35, 'C#': 17.32, 'D': 18.35, 'D#': 19.45, 'E': 20.60,
+        'F': 21.83, 'F#': 23.12, 'G': 24.50, 'G#': 25.96, 'A': 27.50, 'A#': 29.14, 'B': 30.87
+      };
+
+      const getFrequencyForNote = (noteName, octave) => {
+        const baseFreq = noteFrequencies[noteName];
+        return baseFreq * Math.pow(2, octave);
+      };
+
+      const frequencyToNote = (frequency) => {
+        const noteNum = 12 * (Math.log(frequency / 440) / Math.log(2)) + 69;
+        const noteIndex = Math.round(noteNum) % 12;
+        const octave = Math.floor((Math.round(noteNum) - 12) / 12);
+        const cents = Math.floor((noteNum - Math.round(noteNum)) * 100);
+        
+        return {
+          note: notes[noteIndex],
+          octave: octave,
+          cents: cents,
+          frequency: frequency
+        };
+      };
+
+      const autoCorrelate = (buffer, sampleRate) => {
+        let SIZE = buffer.length;
+        let rms = 0;
+
+        for (let i = 0; i < SIZE; i++) {
+          let val = buffer[i];
+          rms += val * val;
+        }
+        rms = Math.sqrt(rms / SIZE);
+        
+        if (rms < 0.01) return -1;
+
+        let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+        for (let i = 0; i < SIZE / 2; i++) {
+          if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
+        }
+        for (let i = 1; i < SIZE / 2; i++) {
+          if (Math.abs(buffer[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+        }
+
+        buffer = buffer.slice(r1, r2);
+        SIZE = buffer.length;
+
+        let c = new Array(SIZE).fill(0);
+        for (let i = 0; i < SIZE; i++) {
+          for (let j = 0; j < SIZE - i; j++) {
+            c[i] = c[i] + buffer[j] * buffer[j + i];
+          }
+        }
+
+        let d = 0;
+        while (c[d] > c[d + 1]) d++;
+
+        let maxval = -1, maxpos = -1;
+        for (let i = d; i < SIZE; i++) {
+          if (c[i] > maxval) {
+            maxval = c[i];
+            maxpos = i;
+          }
+        }
+
+        let T0 = maxpos;
+
+        let x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+        let a = (x1 + x3 - 2 * x2) / 2;
+        let b = (x3 - x1) / 2;
+        if (a) T0 = T0 - b / (2 * a);
+
+        return sampleRate / T0;
+      };
+
+      const updatePitch = () => {
+        if (!analyser || !isListening) return;
+
+        const bufferLength = analyser.fftSize;
+        const buffer = new Float32Array(bufferLength);
+        analyser.getFloatTimeDomainData(buffer);
+
+        const frequency = autoCorrelate(buffer, audioContext.sampleRate);
+
+        if (frequency > -1 && frequency > 20 && frequency < 2000) {
+          const noteInfo = frequencyToNote(frequency);
+          setTunerNote(noteInfo.note);
+          setTunerCents(noteInfo.cents);
+        }
+
+        rafId = requestAnimationFrame(updatePitch);
+      };
+
+      const startTuner = async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          analyser = audioContext.createAnalyser();
+          microphone = audioContext.createMediaStreamSource(stream);
+          analyser.fftSize = 2048;
+          
+          microphone.connect(analyser);
+          setIsListening(true);
+          setShowTuner(true);
+          updatePitch();
+        } catch (err) {
+          alert('Microphone access denied. Please allow microphone access to use the tuner.');
+          console.error('Microphone error:', err);
+        }
+      };
+
+      const stopTuner = () => {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        if (microphone) {
+          microphone.disconnect();
+          microphone = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+        }
+        setIsListening(false);
+        setShowTuner(false);
+        setTunerNote(null);
+        setTunerCents(0);
+      };
+
       const [tunings, setTunings] = useState(defaultTunings);
       const [selectedTuning, setSelectedTuning] = useState('Open G (gDGBD)');
       const [selectedNotes, setSelectedNotes] = useState([]);
@@ -97,6 +233,10 @@
       const [selectedKey, setSelectedKey] = useState('');
       const [selectedScale, setSelectedScale] = useState('major');
       const [spikeCapoFrets, setSpikeCapoFrets] = useState([7, 9, 12]);
+      const [showTuner, setShowTuner] = useState(false);
+      const [tunerNote, setTunerNote] = useState(null);
+      const [tunerCents, setTunerCents] = useState(0);
+      const [isListening, setIsListening] = useState(false);
       const numFrets = 22;
 
       const scaleIntervals = {
@@ -427,7 +567,57 @@
               >
                 Clear Selection
               </button>
+
+              <button
+                onClick={showTuner ? stopTuner : startTuner}
+                className={`px-4 py-2 ${showTuner ? 'bg-gradient-to-r from-red-500 to-rose-500' : 'bg-gradient-to-r from-teal-400 to-cyan-500'} text-white rounded-xl hover:opacity-90 font-medium mt-6 shadow-md hover:shadow-lg transition-all`}
+              >
+                {showTuner ? '🎤 Stop Tuner' : '🎵 Tuner'}
+              </button>
             </div>
+
+            {showTuner && (
+              <div className="mb-6 p-6 bg-gradient-to-r from-teal-50 to-cyan-50 border-2 border-teal-300 rounded-xl shadow-md">
+                <h3 className="font-semibold text-teal-900 mb-4 text-center text-xl">Chromatic Tuner</h3>
+                {isListening ? (
+                  <div className="text-center">
+                    <div className="mb-4">
+                      <div className="text-6xl font-bold text-teal-800">
+                        {tunerNote || '--'}
+                      </div>
+                    </div>
+                    <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
+                      {/* Tuning needle */}
+                      <div 
+                        className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
+                        style={{ left: `calc(50% + ${tunerCents * 0.5}%)` }}
+                      ></div>
+                      {/* Center line */}
+                      <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
+                      {/* Tick marks */}
+                      <div className="absolute inset-0 flex justify-between px-4 items-center">
+                        <span className="text-xs text-gray-500">-50</span>
+                        <span className="text-xs text-gray-500">0</span>
+                        <span className="text-xs text-gray-500">+50</span>
+                      </div>
+                    </div>
+                    <div className={`text-2xl font-bold ${
+                      Math.abs(tunerCents) < 5 ? 'text-green-600' :
+                      Math.abs(tunerCents) < 15 ? 'text-yellow-600' :
+                      'text-red-600'
+                    }`}>
+                      {tunerCents > 0 ? `+${tunerCents}` : tunerCents} cents
+                    </div>
+                    <div className="mt-2 text-sm text-teal-700">
+                      {Math.abs(tunerCents) < 5 ? '✓ In Tune!' :
+                       tunerCents > 0 ? '↑ Too Sharp' : '↓ Too Flat'}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center text-teal-700">Starting tuner...</div>
+                )}
+              </div>
+            )}
 
             {showCustomTuning && (
               <div className="mb-6 p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-300 rounded-xl shadow-md">
