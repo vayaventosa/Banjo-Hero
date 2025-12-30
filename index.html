@@ -56,14 +56,14 @@
       const defaultTunings = {
         'Open G (gDGBD)': ['G2', 'D2', 'G2', 'B2', 'D3'],
         'Sawmill (gDGCD)': ['G2', 'D2', 'G2', 'C3', 'D3'],
-        'Open A (gEAC#E)': ['G2', 'E2', 'A2', 'C#3', 'E3'],
+        'Open A (gEAC#E) - spike to A': ['G2', 'E2', 'A2', 'C#3', 'E3'],
         'Open C (gCGCE)': ['G2', 'C2', 'G2', 'C3', 'E3'],
-        'Open D (gDADF#)': ['G2', 'D2', 'A2', 'D3', 'F#3'],
+        'Open D (gDADF#) - spike to D': ['G2', 'D2', 'A2', 'D3', 'F#3'],
       };
 
       const tuningNotes = {
-        'Open A (gEAC#E)': 'Spike capo G string at fret 9 to reach A',
-        'Open D (gDADF#)': 'Spike capo G string at fret 7 to reach D',
+        'Open A (gEAC#E) - spike to A': 'Spike capo G string at fret 9 to reach A',
+        'Open D (gDADF#) - spike to D': 'Spike capo G string at fret 7 to reach D',
       };
 
       // Calculate which fret the drone string needs to be spiked to (if higher than G)
@@ -121,9 +121,10 @@
         }
         rms = Math.sqrt(rms / SIZE);
         
-        if (rms < 0.01) return -1;
+        // Lower threshold for quieter sounds
+        if (rms < 0.005) return -1;
 
-        let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+        let r1 = 0, r2 = SIZE - 1, thres = 0.1;
         for (let i = 0; i < SIZE / 2; i++) {
           if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
         }
@@ -171,10 +172,15 @@
 
         const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
 
-        if (frequency > -1 && frequency > 20 && frequency < 2000) {
+        // Wider frequency range for cello banjo (C2 is ~65Hz)
+        if (frequency > -1 && frequency > 50 && frequency < 4000) {
           const noteInfo = frequencyToNote(frequency);
           setTunerNote(noteInfo.note);
           setTunerCents(noteInfo.cents);
+        } else {
+          // Show that we're listening but not detecting a clear pitch
+          setTunerNote('...');
+          setTunerCents(0);
         }
 
         rafIdRef.current = requestAnimationFrame(updatePitch);
@@ -591,37 +597,48 @@
                 <h3 className="font-semibold text-teal-900 mb-4 text-center text-xl">Chromatic Tuner</h3>
                 {isListening ? (
                   <div className="text-center">
+                    <div className="mb-2 text-sm text-teal-700">
+                      🎤 Listening... Play a note
+                    </div>
                     <div className="mb-4">
                       <div className="text-6xl font-bold text-teal-800">
-                        {tunerNote || '--'}
+                        {tunerNote || '...'}
                       </div>
                     </div>
-                    <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
-                      {/* Tuning needle */}
-                      <div 
-                        className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
-                        style={{ left: `calc(50% + ${tunerCents * 0.5}%)` }}
-                      ></div>
-                      {/* Center line */}
-                      <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
-                      {/* Tick marks */}
-                      <div className="absolute inset-0 flex justify-between px-4 items-center">
-                        <span className="text-xs text-gray-500">-50</span>
-                        <span className="text-xs text-gray-500">0</span>
-                        <span className="text-xs text-gray-500">+50</span>
+                    {tunerNote && tunerNote !== '...' ? (
+                      <>
+                        <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
+                          {/* Tuning needle */}
+                          <div 
+                            className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
+                            style={{ left: `calc(50% + ${tunerCents * 0.5}%)` }}
+                          ></div>
+                          {/* Center line */}
+                          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
+                          {/* Tick marks */}
+                          <div className="absolute inset-0 flex justify-between px-4 items-center">
+                            <span className="text-xs text-gray-500">-50</span>
+                            <span className="text-xs text-gray-500">0</span>
+                            <span className="text-xs text-gray-500">+50</span>
+                          </div>
+                        </div>
+                        <div className={`text-2xl font-bold ${
+                          Math.abs(tunerCents) < 5 ? 'text-green-600' :
+                          Math.abs(tunerCents) < 15 ? 'text-yellow-600' :
+                          'text-red-600'
+                        }`}>
+                          {tunerCents > 0 ? `+${tunerCents}` : tunerCents} cents
+                        </div>
+                        <div className="mt-2 text-sm text-teal-700">
+                          {Math.abs(tunerCents) < 5 ? '✓ In Tune!' :
+                           tunerCents > 0 ? '↑ Too Sharp' : '↓ Too Flat'}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-teal-600 text-sm mt-4">
+                        Waiting for clear pitch...
                       </div>
-                    </div>
-                    <div className={`text-2xl font-bold ${
-                      Math.abs(tunerCents) < 5 ? 'text-green-600' :
-                      Math.abs(tunerCents) < 15 ? 'text-yellow-600' :
-                      'text-red-600'
-                    }`}>
-                      {tunerCents > 0 ? `+${tunerCents}` : tunerCents} cents
-                    </div>
-                    <div className="mt-2 text-sm text-teal-700">
-                      {Math.abs(tunerCents) < 5 ? '✓ In Tune!' :
-                       tunerCents > 0 ? '↑ Too Sharp' : '↓ Too Flat'}
-                    </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center text-teal-700">Starting tuner...</div>
@@ -846,8 +863,6 @@
                         const noteData = getNoteAtFret(stringNote, actualFret);
                         const isSelected = selectedNotes.includes(`${stringIdx}-${fret}`);
                         const isHighlighted = highlightedNotes.includes(noteData.note);
-                        const droneSpike = getDroneSpikeNeeded();
-                        const needsSpike = isFirstString && droneSpike && fret === droneSpike.fret;
                         
                         return (
                           <div key={fret} className="relative w-12 h-12">
@@ -858,19 +873,14 @@
                                   ? 'bg-gradient-to-br from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 shadow-md' 
                                   : isHighlighted
                                   ? 'bg-gradient-to-br from-cyan-300 to-teal-400 hover:from-cyan-400 hover:to-teal-500 shadow-md'
-                                  : needsSpike
-                                  ? 'bg-gradient-to-br from-pink-300 to-rose-300 border-2 border-pink-500'
                                   : 'bg-gradient-to-br from-orange-50 to-amber-50 hover:from-orange-100 hover:to-amber-100'
                               } transition-all rounded-sm`}
                             >
                               <span className={`text-xs font-semibold ${
-                                isSelected || isHighlighted || needsSpike ? 'text-white drop-shadow' : 'text-gray-700'
+                                isSelected || isHighlighted ? 'text-white drop-shadow' : 'text-gray-700'
                               }`}>
                                 {noteData.note}
                               </span>
-                              {needsSpike && (
-                                <div className="absolute -top-1 -right-1 text-xs">🎯</div>
-                              )}
                             </button>
                             {fret < numFrets && (
                               <div className={`absolute top-1/2 left-full w-0 h-0.5 ${
@@ -901,13 +911,21 @@
                 {/* Spike capo markers */}
                 <div className="flex mt-1">
                   <div className="w-24"></div>
-                  {[...Array(numFrets + 1)].map((_, fret) => (
-                    <div key={fret} className="w-12 text-center">
-                      {spikeCapoFrets.includes(fret) && (
-                        <div className="text-base font-bold text-pink-600 drop-shadow">▲</div>
-                      )}
-                    </div>
-                  ))}
+                  {[...Array(numFrets + 1)].map((_, fret) => {
+                    const droneSpike = getDroneSpikeNeeded();
+                    const showSpike = droneSpike && fret === droneSpike.fret;
+                    return (
+                      <div key={fret} className="w-12 text-center">
+                        {(spikeCapoFrets.includes(fret) || showSpike) && (
+                          <div className={`text-base font-bold drop-shadow ${
+                            showSpike ? 'text-pink-700' : 'text-pink-600'
+                          }`}>
+                            {showSpike ? '🎯' : '▲'}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
