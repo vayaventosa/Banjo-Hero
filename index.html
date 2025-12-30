@@ -49,41 +49,64 @@
         </svg>
     );
 
-    // Main component - paste your entire component code here
     const CelloBanjoFretboard = () => {
       const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
       
-      const defaultTunings = {
-        'Open G (gDGBD)': ['G2', 'D2', 'G2', 'B2', 'D3'],
-        'Sawmill (gDGCD)': ['G2', 'D2', 'G2', 'C3', 'D3'],
-        'Open A (gEAC#E) - spike to A': ['G2', 'E2', 'A2', 'C#3', 'E3'],
-        'Open C (gCGCE)': ['G2', 'C2', 'G2', 'C3', 'E3'],
-        'Open D (gDADF#) - spike to D': ['G2', 'D2', 'A2', 'D3', 'F#3'],
+      // Helper function to get note at a specific fret
+      const getNoteFromString = (noteStr) => {
+        const note = noteStr.slice(0, -1);
+        const octave = parseInt(noteStr.slice(-1));
+        return { note, octave };
       };
+
+      const getNoteAtFret = (stringNote, fret) => {
+        const { note, octave } = getNoteFromString(stringNote);
+        const noteIndex = notes.indexOf(note);
+        const newNoteIndex = (noteIndex + fret) % 12;
+        const octaveShift = Math.floor((noteIndex + fret) / 12);
+        return { note: notes[newNoteIndex], octave: octave + octaveShift };
+      };
+
+      // Generate tunings with correct spike capo note names
+      const generateDefaultTunings = () => {
+        const baseTunings = {
+          'Open G': { base: 'gDGBD', tuning: ['G2', 'D2', 'G2', 'B2', 'D3'] },
+          'Sawmill': { base: 'gDGCD', tuning: ['G2', 'D2', 'G2', 'C3', 'D3'] },
+          'Open A': { base: 'gEAC#E', tuning: ['G2', 'E2', 'A2', 'C#3', 'E3'], spikeAt: 9 },
+          'Open C': { base: 'gCGCE', tuning: ['G2', 'C2', 'G2', 'C3', 'E3'] },
+          'Open D': { base: 'gDADF#', tuning: ['G2', 'D2', 'A2', 'D3', 'F#3'], spikeAt: 7 },
+        };
+
+        const allTunings = {};
+        
+        Object.entries(baseTunings).forEach(([name, data]) => {
+          const { base, tuning, spikeAt } = data;
+          
+          if (spikeAt) {
+            // Calculate what note the drone string would be at this fret
+            const droneAtSpike = getNoteAtFret('G2', spikeAt);
+            const displayName = `${name} (${droneAtSpike.note}${base.substring(1)}) - spike@${spikeAt}`;
+            allTunings[displayName] = tuning;
+          } else {
+            const displayName = `${name} (${base})`;
+            allTunings[displayName] = tuning;
+          }
+        });
+        
+        return allTunings;
+      };
+
+      const defaultTunings = generateDefaultTunings();
 
       const tuningNotes = {
-        'Open A (gEAC#E) - spike to A': 'Spike capo G string at fret 9 to reach A',
-        'Open D (gDADF#) - spike to D': 'Spike capo G string at fret 7 to reach D',
+        'Open A (A EAC#E) - spike@9': 'Spike capo G string at fret 9 to reach A',
+        'Open D (D DAF#) - spike@7': 'Spike capo G string at fret 7 to reach D',
       };
 
-      // Calculate which fret the drone string needs to be spiked to (if higher than G)
-      const getDroneSpikeNeeded = () => {
-        const currentTuning = tunings[selectedTuning];
-        const droneNote = getNoteFromString(currentTuning[0]);
-        const gNote = notes.indexOf('G');
-        const droneNoteIdx = notes.indexOf(droneNote.note);
-        
-        // If drone is G or lower (wrapping around for F, F#), no spike needed
-        if (droneNoteIdx <= gNote || droneNoteIdx >= 10) return null;
-        
-        // Calculate fret difference from G
-        const fretDiff = (droneNoteIdx - gNote + 12) % 12;
-        if (fretDiff === 0) return null;
-        
-        return {
-          fret: fretDiff + 5, // Add 5 because short string starts at fret 5
-          targetNote: droneNote.note
-        };
+      // Calculate which fret the drone string is spiked to for current tuning
+      const getCurrentSpikeFret = () => {
+        const match = selectedTuning.match(/spike@(\d+)/);
+        return match ? parseInt(match[1]) : null;
       };
 
       // Tuner functionality
@@ -121,7 +144,6 @@
         }
         rms = Math.sqrt(rms / SIZE);
         
-        // Lower threshold for quieter sounds
         if (rms < 0.005) return -1;
 
         let r1 = 0, r2 = SIZE - 1, thres = 0.1;
@@ -172,13 +194,11 @@
 
         const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
 
-        // Wider frequency range for cello banjo (C2 is ~65Hz)
         if (frequency > -1 && frequency > 50 && frequency < 4000) {
           const noteInfo = frequencyToNote(frequency);
           setTunerNote(noteInfo.note);
           setTunerCents(noteInfo.cents);
         } else {
-          // Show that we're listening but not detecting a clear pitch
           setTunerNote('...');
           setTunerCents(0);
         }
@@ -223,7 +243,6 @@
         setTunerCents(0);
       };
 
-      // Cleanup on unmount
       useEffect(() => {
         return () => {
           if (isListening) {
@@ -233,7 +252,7 @@
       }, []);
 
       const [tunings, setTunings] = useState(defaultTunings);
-      const [selectedTuning, setSelectedTuning] = useState('Open G (gDGBD)');
+      const [selectedTuning, setSelectedTuning] = useState(Object.keys(defaultTunings)[0]);
       const [selectedNotes, setSelectedNotes] = useState([]);
       const [customTuningName, setCustomTuningName] = useState('');
       const [customTuningNotes, setCustomTuningNotes] = useState(['G2', 'D2', 'G2', 'B2', 'D3']);
@@ -249,7 +268,6 @@
       const [isListening, setIsListening] = useState(false);
       const numFrets = 22;
 
-      // Audio refs for tuner
       const audioContextRef = useRef(null);
       const analyserRef = useRef(null);
       const microphoneRef = useRef(null);
@@ -345,20 +363,6 @@
         }
         
         return null;
-      };
-
-      const getNoteFromString = (noteStr) => {
-        const note = noteStr.slice(0, -1);
-        const octave = parseInt(noteStr.slice(-1));
-        return { note, octave };
-      };
-
-      const getNoteAtFret = (stringNote, fret) => {
-        const { note, octave } = getNoteFromString(stringNote);
-        const noteIndex = notes.indexOf(note);
-        const newNoteIndex = (noteIndex + fret) % 12;
-        const octaveShift = Math.floor((noteIndex + fret) / 12);
-        return { note: notes[newNoteIndex], octave: octave + octaveShift };
       };
 
       const toggleNote = (stringIdx, fret) => {
@@ -539,6 +543,8 @@
         'B': { major: [], minor: [] },
       };
 
+      const currentSpikeFret = getCurrentSpikeFret();
+
       return (
         <div className="w-full max-w-6xl mx-auto p-6 bg-gradient-to-br from-orange-100 via-amber-50 to-cyan-100">
           <div className="bg-white rounded-2xl shadow-2xl p-6 border-4 border-orange-200">
@@ -608,14 +614,11 @@
                     {tunerNote && tunerNote !== '...' ? (
                       <>
                         <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
-                          {/* Tuning needle */}
                           <div 
                             className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
                             style={{ left: `calc(50% + ${tunerCents * 0.5}%)` }}
                           ></div>
-                          {/* Center line */}
                           <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
-                          {/* Tick marks */}
                           <div className="absolute inset-0 flex justify-between px-4 items-center">
                             <span className="text-xs text-gray-500">-50</span>
                             <span className="text-xs text-gray-500">0</span>
@@ -908,19 +911,19 @@
                   ))}
                 </div>
 
-                {/* Spike capo markers */}
+                {/* Spike capo markers - ONLY on drone string row */}
                 <div className="flex mt-1">
                   <div className="w-24"></div>
                   {[...Array(numFrets + 1)].map((_, fret) => {
-                    const droneSpike = getDroneSpikeNeeded();
-                    const showSpike = droneSpike && fret === droneSpike.fret;
+                    const showActiveSpike = currentSpikeFret && fret === currentSpikeFret;
+                    const showAvailableSpike = spikeCapoFrets.includes(fret) && !currentSpikeFret;
                     return (
                       <div key={fret} className="w-12 text-center">
-                        {(spikeCapoFrets.includes(fret) || showSpike) && (
+                        {(showActiveSpike || showAvailableSpike) && (
                           <div className={`text-base font-bold drop-shadow ${
-                            showSpike ? 'text-pink-700' : 'text-pink-600'
+                            showActiveSpike ? 'text-pink-700' : 'text-pink-600'
                           }`}>
-                            {showSpike ? '🎯' : '▲'}
+                            {showActiveSpike ? '🎯' : '▲'}
                           </div>
                         )}
                       </div>
