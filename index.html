@@ -209,8 +209,8 @@
       };
 
       const updatePitch = () => {
-        if (!analyserRef.current || !isListening) {
-          console.log('UpdatePitch stopped - analyser:', !!analyserRef.current, 'isListening:', isListening);
+        if (!analyserRef.current || !isListeningRef.current) {
+          console.log('UpdatePitch stopped - analyser:', !!analyserRef.current, 'isListening:', isListeningRef.current);
           return;
         }
 
@@ -283,9 +283,10 @@
           console.log('Microphone connected to analyser');
           
           setIsListening(true);
+          isListeningRef.current = true;
           setShowTuner(true);
           console.log('Starting pitch detection...');
-          updatePitch();
+          rafIdRef.current = requestAnimationFrame(updatePitch);
         } catch (err) {
           console.error('Microphone error:', err);
           if (err.name === 'NotAllowedError') {
@@ -299,6 +300,8 @@
       };
 
       const stopTuner = () => {
+        isListeningRef.current = false;
+        
         if (rafIdRef.current) {
           cancelAnimationFrame(rafIdRef.current);
           rafIdRef.current = null;
@@ -320,7 +323,12 @@
         setShowTuner(false);
         setTunerNote(null);
         setTunerCents(0);
+        setAudioLevel(0);
       };
+
+      useEffect(() => {
+        isListeningRef.current = isListening;
+      }, [isListening]);
 
       useEffect(() => {
         return () => {
@@ -363,6 +371,7 @@
       const microphoneRef = useRef(null);
       const mediaStreamRef = useRef(null);
       const rafIdRef = useRef(null);
+      const isListeningRef = useRef(false);
 
       // Helper to get actual tuning array
       const getCurrentTuning = () => {
