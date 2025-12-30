@@ -52,21 +52,6 @@
     const CelloBanjoFretboard = () => {
       const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
       
-      // Helper function to get note at a specific fret
-      const getNoteFromString = (noteStr) => {
-        const note = noteStr.slice(0, -1);
-        const octave = parseInt(noteStr.slice(-1));
-        return { note, octave };
-      };
-
-      const getNoteAtFret = (stringNote, fret) => {
-        const { note, octave } = getNoteFromString(stringNote);
-        const noteIndex = notes.indexOf(note);
-        const newNoteIndex = (noteIndex + fret) % 12;
-        const octaveShift = Math.floor((noteIndex + fret) / 12);
-        return { note: notes[newNoteIndex], octave: octave + octaveShift };
-      };
-
       // Generate tunings with correct display names
       const generateDefaultTunings = () => {
         const baseTunings = {
@@ -114,12 +99,55 @@
         return allTunings;
       };
 
-      const defaultTunings = generateDefaultTunings();
+      const defaultTunings = useRef(generateDefaultTunings()).current;
 
       const tuningNotes = {
         'Open A (aEAC#E)': 'Spike capo G string at fret 7 to reach A',
         'Open D (aDF#AD)': 'Spike capo G string at fret 7 to reach A',
         'D Modal (aDGAD)': 'Spike capo G string at fret 7 to reach A',
+      };
+
+      // STATE - All useState declarations at the top
+      const [tunings, setTunings] = useState(defaultTunings);
+      const [selectedTuning, setSelectedTuning] = useState(Object.keys(defaultTunings)[0]);
+      const [selectedNotes, setSelectedNotes] = useState([]);
+      const [customTuningName, setCustomTuningName] = useState('');
+      const [customTuningNotes, setCustomTuningNotes] = useState(['G2', 'D2', 'G2', 'B2', 'D3']);
+      const [showCustomTuning, setShowCustomTuning] = useState(false);
+      const [chordLookup, setChordLookup] = useState('');
+      const [highlightedNotes, setHighlightedNotes] = useState([]);
+      const [selectedKey, setSelectedKey] = useState('');
+      const [selectedScale, setSelectedScale] = useState('major');
+      const [spikeCapoFrets, setSpikeCapoFrets] = useState([7, 9, 12]);
+      const [showTuner, setShowTuner] = useState(false);
+      const [tunerNote, setTunerNote] = useState(null);
+      const [tunerCents, setTunerCents] = useState(0);
+      const [isListening, setIsListening] = useState(false);
+      const [audioLevel, setAudioLevel] = useState(0);
+      
+      const numFrets = 22;
+
+      // REFS
+      const audioContextRef = useRef(null);
+      const analyserRef = useRef(null);
+      const microphoneRef = useRef(null);
+      const mediaStreamRef = useRef(null);
+      const rafIdRef = useRef(null);
+      const isListeningRef = useRef(false);
+
+      // HELPER FUNCTIONS
+      const getNoteFromString = (noteStr) => {
+        const note = noteStr.slice(0, -1);
+        const octave = parseInt(noteStr.slice(-1));
+        return { note, octave };
+      };
+
+      const getNoteAtFret = (stringNote, fret) => {
+        const { note, octave } = getNoteFromString(stringNote);
+        const noteIndex = notes.indexOf(note);
+        const newNoteIndex = (noteIndex + fret) % 12;
+        const octaveShift = Math.floor((noteIndex + fret) / 12);
+        return { note: notes[newNoteIndex], octave: octave + octaveShift };
       };
 
       // Calculate which fret the drone string is spiked to for current tuning
@@ -143,7 +171,8 @@
         const noteNum = 12 * (Math.log(frequency / 440) / Math.log(2)) + 69;
         const noteIndex = Math.round(noteNum) % 12;
         const octave = Math.floor((Math.round(noteNum) - 12) / 12);
-        const cents = Math.floor((noteNum - Math.round(noteNum)) * 100);
+        const nearest = Math.round(noteNum);
+        const cents = Math.round((noteNum - nearest) * 100);
         
         return {
           note: notes[noteIndex],
@@ -155,17 +184,8 @@
 
       const autoCorrelate = (buffer, sampleRate) => {
         let SIZE = buffer.length;
-        let rms = 0;
 
-        for (let i = 0; i < SIZE; i++) {
-          let val = buffer[i];
-          rms += val * val;
-        }
-        rms = Math.sqrt(rms / SIZE);
-        
-        // Lower threshold for quieter sounds
-        if (rms < 0.003) return -1;
-
+        // RMS check removed - now done in updatePitch for performance
         let r1 = 0, r2 = SIZE - 1, thres = 0.05;
         for (let i = 0; i < SIZE / 2; i++) {
           if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
@@ -185,7 +205,8 @@
         }
 
         let d = 0;
-        while (c[d] > c[d + 1]) d++;
+        // Bounds check to avoid reading past array edge on small buffers
+        while (d < SIZE - 1 && c[d] > c[d + 1]) d++;
 
         let maxval = -1, maxpos = -1;
         for (let i = d; i < SIZE; i++) {
@@ -197,6 +218,9 @@
 
         let T0 = maxpos;
 
+        // Guard against invalid T0
+        if (T0 <= 0) return -1;
+
         // Parabolic interpolation for better accuracy
         if (T0 > 0 && T0 < SIZE - 1) {
           let x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
@@ -205,7 +229,12 @@
           if (a) T0 = T0 - b / (2 * a);
         }
 
-        return sampleRate / T0;
+        const frequency = sampleRate / T0;
+        
+        // Guard against Infinity or invalid results
+        if (!isFinite(frequency) || frequency <= 0) return -1;
+
+        return frequency;
       };
 
       const updatePitch = () => {
@@ -230,7 +259,22 @@
         
         console.log('Audio level (RMS):', rms.toFixed(4));
 
-        const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
+        // Early return if audio too quiet (avoid wasted autocorrelation)
+        if (rms < 0.003) {
+          setTunerNote('...');
+          setTunerCents(0);
+          rafIdRef.current = requestAnimationFrame(updatePitch);
+          return;
+        }
+
+        // Null-guard sampleRate to avoid race condition crashes
+        const sr = audioContextRef.current?.sampleRate;
+        if (!sr) {
+          rafIdRef.current = requestAnimationFrame(updatePitch);
+          return;
+        }
+
+        const frequency = autoCorrelate(buffer, sr);
         console.log('Detected frequency:', frequency);
 
         if (frequency > -1 && frequency > 50 && frequency < 4000) {
@@ -271,8 +315,10 @@
           console.log('Sample rate:', audioContextRef.current.sampleRate);
           
           analyserRef.current = audioContextRef.current.createAnalyser();
-          analyserRef.current.fftSize = 4096;
+          analyserRef.current.fftSize = 2048; // Lowered from 4096 for better mobile performance
           analyserRef.current.smoothingTimeConstant = 0.3; // Less smoothing for more responsive detection
+          analyserRef.current.minDecibels = -90; // iOS Safari fix
+          analyserRef.current.maxDecibels = -10; // iOS Safari fix
           console.log('Analyser created with fftSize:', analyserRef.current.fftSize);
           
           microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
@@ -288,6 +334,7 @@
           console.log('Starting pitch detection...');
           rafIdRef.current = requestAnimationFrame(updatePitch);
         } catch (err) {
+          stopTuner(); // Clean up state/UI on error
           console.error('Microphone error:', err);
           if (err.name === 'NotAllowedError') {
             alert('Microphone access denied. Please allow microphone access to use the tuner.');
@@ -347,31 +394,6 @@
           }
         };
       }, []);
-
-      const [tunings, setTunings] = useState(defaultTunings);
-      const [selectedTuning, setSelectedTuning] = useState(Object.keys(defaultTunings)[0]);
-      const [selectedNotes, setSelectedNotes] = useState([]);
-      const [customTuningName, setCustomTuningName] = useState('');
-      const [customTuningNotes, setCustomTuningNotes] = useState(['G2', 'D2', 'G2', 'B2', 'D3']);
-      const [showCustomTuning, setShowCustomTuning] = useState(false);
-      const [chordLookup, setChordLookup] = useState('');
-      const [highlightedNotes, setHighlightedNotes] = useState([]);
-      const [selectedKey, setSelectedKey] = useState('');
-      const [selectedScale, setSelectedScale] = useState('major');
-      const [spikeCapoFrets, setSpikeCapoFrets] = useState([7, 9, 12]);
-      const [showTuner, setShowTuner] = useState(false);
-      const [tunerNote, setTunerNote] = useState(null);
-      const [tunerCents, setTunerCents] = useState(0);
-      const [isListening, setIsListening] = useState(false);
-      const [audioLevel, setAudioLevel] = useState(0);
-      const numFrets = 22;
-
-      const audioContextRef = useRef(null);
-      const analyserRef = useRef(null);
-      const microphoneRef = useRef(null);
-      const mediaStreamRef = useRef(null);
-      const rafIdRef = useRef(null);
-      const isListeningRef = useRef(false);
 
       // Helper to get actual tuning array
       const getCurrentTuning = () => {
@@ -743,7 +765,7 @@
                         <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
                           <div 
                             className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
-                            style={{ left: `calc(50% + ${tunerCents * 0.5}%)` }}
+                            style={{ left: `calc(50% + ${Math.max(-50, Math.min(50, tunerCents)) * 0.5}%)` }}
                           ></div>
                           <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
                           <div className="absolute inset-0 flex justify-between px-4 items-center">
@@ -824,7 +846,7 @@
                     type="text"
                     value={chordLookup}
                     onChange={(e) => setChordLookup(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleChordLookup()}
+                    onKeyDown={(e) => e.key === 'Enter' && handleChordLookup()}
                     placeholder="Cmaj"
                     className="px-3 py-2 border-2 border-cyan-300 rounded-xl w-48"
                   />
@@ -1093,8 +1115,9 @@
       );
     };
 
-    // Render the app
-    ReactDOM.render(<CelloBanjoFretboard />, document.getElementById('root'));
+    // Render the app with React 18 API
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<CelloBanjoFretboard />);
 </script>
 ```
 
