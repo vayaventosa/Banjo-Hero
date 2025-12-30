@@ -209,16 +209,30 @@
       };
 
       const updatePitch = () => {
-        if (!analyserRef.current || !isListening) return;
+        if (!analyserRef.current || !isListening) {
+          console.log('UpdatePitch stopped - analyser:', !!analyserRef.current, 'isListening:', isListening);
+          return;
+        }
 
         const bufferLength = analyserRef.current.fftSize;
         const buffer = new Float32Array(bufferLength);
         analyserRef.current.getFloatTimeDomainData(buffer);
 
+        // Calculate RMS to check if we're getting audio
+        let rms = 0;
+        for (let i = 0; i < buffer.length; i++) {
+          rms += buffer[i] * buffer[i];
+        }
+        rms = Math.sqrt(rms / buffer.length);
+        
+        console.log('Audio level (RMS):', rms.toFixed(4));
+
         const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
+        console.log('Detected frequency:', frequency);
 
         if (frequency > -1 && frequency > 50 && frequency < 4000) {
           const noteInfo = frequencyToNote(frequency);
+          console.log('Note detected:', noteInfo.note, 'Cents:', noteInfo.cents);
           setTunerNote(noteInfo.note);
           setTunerCents(noteInfo.cents);
         } else {
@@ -231,6 +245,7 @@
 
       const startTuner = async () => {
         try {
+          console.log('Requesting microphone access...');
           const stream = await navigator.mediaDevices.getUserMedia({ 
             audio: {
               echoCancellation: false,
@@ -238,18 +253,28 @@
               autoGainControl: false
             } 
           });
+          console.log('Microphone access granted, stream:', stream);
+          console.log('Audio tracks:', stream.getAudioTracks());
           
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          console.log('Audio context created, state:', audioContextRef.current.state);
+          console.log('Sample rate:', audioContextRef.current.sampleRate);
+          
           analyserRef.current = audioContextRef.current.createAnalyser();
-          analyserRef.current.fftSize = 4096; // Increased for better low frequency detection
+          analyserRef.current.fftSize = 4096;
           analyserRef.current.smoothingTimeConstant = 0.8;
+          console.log('Analyser created with fftSize:', analyserRef.current.fftSize);
           
           microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
-          microphoneRef.current.mediaStream = stream; // Store stream reference for cleanup
+          mediaStreamRef.current = stream; // Store in separate ref
+          console.log('Media stream source created');
           
           microphoneRef.current.connect(analyserRef.current);
+          console.log('Microphone connected to analyser');
+          
           setIsListening(true);
           setShowTuner(true);
+          console.log('Starting pitch detection...');
           updatePitch();
         } catch (err) {
           console.error('Microphone error:', err);
@@ -268,8 +293,11 @@
           cancelAnimationFrame(rafIdRef.current);
           rafIdRef.current = null;
         }
-        if (microphoneRef.current && microphoneRef.current.mediaStream) {
-          microphoneRef.current.mediaStream.getTracks().forEach(track => track.stop());
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+        }
+        if (microphoneRef.current) {
           microphoneRef.current.disconnect();
           microphoneRef.current = null;
         }
@@ -290,10 +318,10 @@
           if (rafIdRef.current) {
             cancelAnimationFrame(rafIdRef.current);
           }
+          if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          }
           if (microphoneRef.current) {
-            if (microphoneRef.current.mediaStream) {
-              microphoneRef.current.mediaStream.getTracks().forEach(track => track.stop());
-            }
             microphoneRef.current.disconnect();
           }
           if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
@@ -322,6 +350,7 @@
       const audioContextRef = useRef(null);
       const analyserRef = useRef(null);
       const microphoneRef = useRef(null);
+      const mediaStreamRef = useRef(null);
       const rafIdRef = useRef(null);
 
       // Helper to get actual tuning array
