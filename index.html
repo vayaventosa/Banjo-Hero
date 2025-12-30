@@ -58,12 +58,32 @@
         'Sawmill (gDGCD)': ['G2', 'D2', 'G2', 'C3', 'D3'],
         'Open A (G→A)': ['G2', 'E2', 'A2', 'C#3', 'E3'],
         'Open C (gCGCE)': ['G2', 'C2', 'G2', 'C3', 'E3'],
-        'Open D (G→D)': ['G2', 'D2', 'A2', 'D3', 'E3'],
+        'Open D (G→D)': ['G2', 'D2', 'A2', 'D3', 'F#3'],
       };
 
       const tuningNotes = {
         'Open A (G→A)': 'Spike capo G string at fret 9 to reach A',
         'Open D (G→D)': 'Spike capo G string at fret 7 to reach D',
+      };
+
+      // Calculate which fret the drone string needs to be spiked to (if higher than G)
+      const getDroneSpikeNeeded = () => {
+        const currentTuning = tunings[selectedTuning];
+        const droneNote = getNoteFromString(currentTuning[0]);
+        const gNote = notes.indexOf('G');
+        const droneNoteIdx = notes.indexOf(droneNote.note);
+        
+        // If drone is G or lower (wrapping around for F, F#), no spike needed
+        if (droneNoteIdx <= gNote || droneNoteIdx >= 10) return null;
+        
+        // Calculate fret difference from G
+        const fretDiff = (droneNoteIdx - gNote + 12) % 12;
+        if (fretDiff === 0) return null;
+        
+        return {
+          fret: fretDiff + 5, // Add 5 because short string starts at fret 5
+          targetNote: droneNote.note
+        };
       };
 
       const [tunings, setTunings] = useState(defaultTunings);
@@ -407,33 +427,6 @@
               >
                 Clear Selection
               </button>
-
-              <div className="mt-6">
-                <label className="block text-sm font-semibold text-orange-800 mb-2">
-                  Spike Capo Frets (for drone string):
-                </label>
-                <div className="flex gap-2">
-                  {[5, 7, 9, 10, 12, 14, 15, 17, 19].map(fret => (
-                    <button
-                      key={fret}
-                      onClick={() => {
-                        setSpikeCapoFrets(prev => 
-                          prev.includes(fret) 
-                            ? prev.filter(f => f !== fret)
-                            : [...prev, fret].sort((a, b) => a - b)
-                        );
-                      }}
-                      className={`px-3 py-1 rounded-lg ${
-                        spikeCapoFrets.includes(fret)
-                          ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md'
-                          : 'bg-orange-100 text-orange-800 border border-orange-300'
-                      } text-sm font-medium hover:opacity-80 transition-all`}
-                    >
-                      {fret}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
 
             {showCustomTuning && (
@@ -653,6 +646,9 @@
                         const noteData = getNoteAtFret(stringNote, actualFret);
                         const isSelected = selectedNotes.includes(`${stringIdx}-${fret}`);
                         const isHighlighted = highlightedNotes.includes(noteData.note);
+                        const droneSpike = getDroneSpikeNeeded();
+                        const needsSpike = isFirstString && droneSpike && fret === droneSpike.fret;
+                        
                         return (
                           <div key={fret} className="relative w-12 h-12">
                             <button
@@ -662,14 +658,19 @@
                                   ? 'bg-gradient-to-br from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 shadow-md' 
                                   : isHighlighted
                                   ? 'bg-gradient-to-br from-cyan-300 to-teal-400 hover:from-cyan-400 hover:to-teal-500 shadow-md'
+                                  : needsSpike
+                                  ? 'bg-gradient-to-br from-pink-300 to-rose-300 border-2 border-pink-500'
                                   : 'bg-gradient-to-br from-orange-50 to-amber-50 hover:from-orange-100 hover:to-amber-100'
                               } transition-all rounded-sm`}
                             >
                               <span className={`text-xs font-semibold ${
-                                isSelected || isHighlighted ? 'text-white drop-shadow' : 'text-gray-700'
+                                isSelected || isHighlighted || needsSpike ? 'text-white drop-shadow' : 'text-gray-700'
                               }`}>
                                 {noteData.note}
                               </span>
+                              {needsSpike && (
+                                <div className="absolute -top-1 -right-1 text-xs">🎯</div>
+                              )}
                             </button>
                             {fret < numFrets && (
                               <div className={`absolute top-1/2 left-full w-0 h-0.5 ${
@@ -708,6 +709,34 @@
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            {/* Spike Capo Selector */}
+            <div className="mt-6 p-4 bg-gradient-to-r from-orange-50 to-pink-50 border-2 border-orange-300 rounded-xl shadow-md">
+              <label className="block text-sm font-semibold text-orange-800 mb-2">
+                Spike Capo Frets (for drone string):
+              </label>
+              <div className="flex gap-2 flex-wrap">
+                {[5, 7, 9, 10, 12, 14, 15, 17, 19].map(fret => (
+                  <button
+                    key={fret}
+                    onClick={() => {
+                      setSpikeCapoFrets(prev => 
+                        prev.includes(fret) 
+                          ? prev.filter(f => f !== fret)
+                          : [...prev, fret].sort((a, b) => a - b)
+                      );
+                    }}
+                    className={`px-3 py-1 rounded-lg ${
+                      spikeCapoFrets.includes(fret)
+                        ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md'
+                        : 'bg-orange-100 text-orange-800 border border-orange-300'
+                    } text-sm font-medium hover:opacity-80 transition-all`}
+                  >
+                    {fret}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
