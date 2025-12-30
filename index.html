@@ -36,8 +36,9 @@
 <body>
     <div id="root"></div>
 
-    <script type="text/babel">
-    const { useState, useEffect, useRef, useCallback } = React;
+```
+<script type="text/babel">
+    const { useState, useEffect, useRef } = React;
 
     // Music icon component
     const Music = ({ className }) => (
@@ -110,4 +111,1044 @@
       const [tunings, setTunings] = useState(defaultTunings);
       const [selectedTuning, setSelectedTuning] = useState(Object.keys(defaultTunings)[0]);
       const [selectedNotes, setSelectedNotes] = useState([]);
-      const [custom​​​​​​​​​​​​​​​​
+      const [customTuningName, setCustomTuningName] = useState('');
+      const [customTuningNotes, setCustomTuningNotes] = useState(['G2', 'D2', 'G2', 'B2', 'D3']);
+      const [showCustomTuning, setShowCustomTuning] = useState(false);
+      const [chordLookup, setChordLookup] = useState('');
+      const [highlightedNotes, setHighlightedNotes] = useState([]);
+      const [selectedKey, setSelectedKey] = useState('');
+      const [selectedScale, setSelectedScale] = useState('major');
+      const [spikeCapoFrets, setSpikeCapoFrets] = useState([7, 9, 12]);
+      const [showTuner, setShowTuner] = useState(false);
+      const [tunerNote, setTunerNote] = useState(null);
+      const [tunerCents, setTunerCents] = useState(0);
+      const [isListening, setIsListening] = useState(false);
+      const [audioLevel, setAudioLevel] = useState(0);
+      
+      const numFrets = 22;
+
+      // REFS
+      const audioContextRef = useRef(null);
+      const analyserRef = useRef(null);
+      const microphoneRef = useRef(null);
+      const mediaStreamRef = useRef(null);
+      const rafIdRef = useRef(null);
+      const isListeningRef = useRef(false);
+
+      // HELPER FUNCTIONS
+      const getNoteFromString = (noteStr) => {
+        const note = noteStr.slice(0, -1);
+        const octave = parseInt(noteStr.slice(-1));
+        return { note, octave };
+      };
+
+      const getNoteAtFret = (stringNote, fret) => {
+        const { note, octave } = getNoteFromString(stringNote);
+        const noteIndex = notes.indexOf(note);
+        const newNoteIndex = (noteIndex + fret) % 12;
+        const octaveShift = Math.floor((noteIndex + fret) / 12);
+        return { note: notes[newNoteIndex], octave: octave + octaveShift };
+      };
+
+      // Calculate which fret the drone string is spiked to for current tuning
+      const getCurrentSpikeFret = () => {
+        const tuningData = tunings[selectedTuning];
+        return tuningData?.spikeAt || null;
+      };
+
+      // Tuner functionality
+      const noteFrequencies = {
+        'C': 16.35, 'C#': 17.32, 'D': 18.35, 'D#': 19.45, 'E': 20.60,
+        'F': 21.83, 'F#': 23.12, 'G': 24.50, 'G#': 25.96, 'A': 27.50, 'A#': 29.14, 'B': 30.87
+      };
+
+      const getFrequencyForNote = (noteName, octave) => {
+        const baseFreq = noteFrequencies[noteName];
+        return baseFreq * Math.pow(2, octave);
+      };
+
+      const frequencyToNote = (frequency) => {
+        const noteNum = 12 * (Math.log(frequency / 440) / Math.log(2)) + 69;
+        const noteIndex = Math.round(noteNum) % 12;
+        const octave = Math.floor((Math.round(noteNum) - 12) / 12);
+        const nearest = Math.round(noteNum);
+        const cents = Math.round((noteNum - nearest) * 100);
+        
+        return {
+          note: notes[noteIndex],
+          octave: octave,
+          cents: cents,
+          frequency: frequency
+        };
+      };
+
+      const autoCorrelate = (buffer, sampleRate) => {
+        let SIZE = buffer.length;
+
+        // RMS check removed - now done in updatePitch for performance
+        let r1 = 0, r2 = SIZE - 1, thres = 0.05;
+        for (let i = 0; i < SIZE / 2; i++) {
+          if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
+        }
+        for (let i = 1; i < SIZE / 2; i++) {
+          if (Math.abs(buffer[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+        }
+
+        buffer = buffer.slice(r1, r2);
+        SIZE = buffer.length;
+
+        let c = new Array(SIZE).fill(0);
+        for (let i = 0; i < SIZE; i++) {
+          for (let j = 0; j < SIZE - i; j++) {
+            c[i] = c[i] + buffer[j] * buffer[j + i];
+          }
+        }
+
+        let d = 0;
+        // Bounds check to avoid reading past array edge on small buffers
+        while (d < SIZE - 1 && c[d] > c[d + 1]) d++;
+
+        let maxval = -1, maxpos = -1;
+        for (let i = d; i < SIZE; i++) {
+          if (c[i] > maxval) {
+            maxval = c[i];
+            maxpos = i;
+          }
+        }
+
+        let T0 = maxpos;
+
+        // Guard against invalid T0
+        if (T0 <= 0) return -1;
+
+        // Parabolic interpolation for better accuracy
+        if (T0 > 0 && T0 < SIZE - 1) {
+          let x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+          let a = (x1 + x3 - 2 * x2) / 2;
+          let b = (x3 - x1) / 2;
+          if (a) T0 = T0 - b / (2 * a);
+        }
+
+        const frequency = sampleRate / T0;
+        
+        // Guard against Infinity or invalid results
+        if (!isFinite(frequency) || frequency <= 0) return -1;
+
+        return frequency;
+      };
+
+      const updatePitch = () => {
+        if (!analyserRef.current || !isListeningRef.current) {
+          console.log('UpdatePitch stopped - analyser:', !!analyserRef.current, 'isListening:', isListeningRef.current);
+          return;
+        }
+
+        const bufferLength = analyserRef.current.fftSize;
+        const buffer = new Float32Array(bufferLength);
+        analyserRef.current.getFloatTimeDomainData(buffer);
+
+        // Calculate RMS to check if we're getting audio
+        let rms = 0;
+        for (let i = 0; i < buffer.length; i++) {
+          rms += buffer[i] * buffer[i];
+        }
+        rms = Math.sqrt(rms / buffer.length);
+        
+        // Update audio level state for visual indicator (scale to 0-100)
+        setAudioLevel(Math.min(100, rms * 1000));
+        
+        console.log('Audio level (RMS):', rms.toFixed(4));
+
+        // Early return if audio too quiet (avoid wasted autocorrelation)
+        if (rms < 0.003) {
+          setTunerNote('...');
+          setTunerCents(0);
+          rafIdRef.current = requestAnimationFrame(updatePitch);
+          return;
+        }
+
+        // Null-guard sampleRate to avoid race condition crashes
+        const sr = audioContextRef.current?.sampleRate;
+        if (!sr) {
+          rafIdRef.current = requestAnimationFrame(updatePitch);
+          return;
+        }
+
+        const frequency = autoCorrelate(buffer, sr);
+        console.log('Detected frequency:', frequency);
+
+        if (frequency > -1 && frequency > 50 && frequency < 4000) {
+          const noteInfo = frequencyToNote(frequency);
+          console.log('Note detected:', noteInfo.note, 'Cents:', noteInfo.cents);
+          setTunerNote(noteInfo.note);
+          setTunerCents(noteInfo.cents);
+        } else {
+          setTunerNote('...');
+          setTunerCents(0);
+        }
+
+        rafIdRef.current = requestAnimationFrame(updatePitch);
+      };
+
+      const startTuner = async () => {
+        try {
+          console.log('Requesting microphone access...');
+          const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false
+            } 
+          });
+          console.log('Microphone access granted, stream:', stream);
+          console.log('Audio tracks:', stream.getAudioTracks());
+          
+          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          console.log('Audio context created, state:', audioContextRef.current.state);
+          
+          // Resume audio context if suspended (required on iOS/Safari)
+          if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+            console.log('Audio context resumed, new state:', audioContextRef.current.state);
+          }
+          
+          console.log('Sample rate:', audioContextRef.current.sampleRate);
+          
+          analyserRef.current = audioContextRef.current.createAnalyser();
+          analyserRef.current.fftSize = 2048; // Lowered from 4096 for better mobile performance
+          analyserRef.current.smoothingTimeConstant = 0.3; // Less smoothing for more responsive detection
+          analyserRef.current.minDecibels = -90; // iOS Safari fix
+          analyserRef.current.maxDecibels = -10; // iOS Safari fix
+          console.log('Analyser created with fftSize:', analyserRef.current.fftSize);
+          
+          microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
+          mediaStreamRef.current = stream; // Store in separate ref
+          console.log('Media stream source created');
+          
+          microphoneRef.current.connect(analyserRef.current);
+          console.log('Microphone connected to analyser');
+          
+          setIsListening(true);
+          isListeningRef.current = true;
+          setShowTuner(true);
+          console.log('Starting pitch detection...');
+          rafIdRef.current = requestAnimationFrame(updatePitch);
+        } catch (err) {
+          stopTuner(); // Clean up state/UI on error
+          console.error('Microphone error:', err);
+          if (err.name === 'NotAllowedError') {
+            alert('Microphone access denied. Please allow microphone access to use the tuner.');
+          } else if (err.name === 'NotFoundError') {
+            alert('No microphone found. Please connect a microphone to use the tuner.');
+          } else {
+            alert('Error accessing microphone: ' + err.message);
+          }
+        }
+      };
+
+      const stopTuner = () => {
+        isListeningRef.current = false;
+        
+        if (rafIdRef.current) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+        }
+        if (microphoneRef.current) {
+          microphoneRef.current.disconnect();
+          microphoneRef.current = null;
+        }
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+        }
+        analyserRef.current = null;
+        setIsListening(false);
+        setShowTuner(false);
+        setTunerNote(null);
+        setTunerCents(0);
+        setAudioLevel(0);
+      };
+
+      useEffect(() => {
+        isListeningRef.current = isListening;
+      }, [isListening]);
+
+      // Stop tuner when page becomes hidden (user navigates away or switches tabs)
+      useEffect(() => {
+        const handleVisibilityChange = () => {
+          if (document.hidden && isListening) {
+            stopTuner();
+          }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+      }, [isListening]);
+
+      useEffect(() => {
+        return () => {
+          // Cleanup on unmount
+          if (rafIdRef.current) {
+            cancelAnimationFrame(rafIdRef.current);
+          }
+          if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          }
+          if (microphoneRef.current) {
+            microphoneRef.current.disconnect();
+          }
+          if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+            audioContextRef.current.close();
+          }
+        };
+      }, []);
+
+      // Helper to get actual tuning array
+      const getCurrentTuning = () => {
+        const tuningData = tunings[selectedTuning];
+        return tuningData?.tuning || tuningData || [];
+      };
+
+      const scaleIntervals = {
+        'major': [0, 2, 4, 5, 7, 9, 11],
+        'minor': [0, 2, 3, 5, 7, 8, 10],
+        'harmonic minor': [0, 2, 3, 5, 7, 8, 11],
+        'melodic minor': [0, 2, 3, 5, 7, 9, 11],
+        'dorian': [0, 2, 3, 5, 7, 9, 10],
+        'mixolydian': [0, 2, 4, 5, 7, 9, 10],
+      };
+
+      const getNotesInKey = (root, scale) => {
+        if (!root) return [];
+        const rootIdx = notes.indexOf(root);
+        const intervals = scaleIntervals[scale];
+        return intervals.map(interval => notes[(rootIdx + interval) % 12]);
+      };
+
+      const getChordsInKey = (root, scale) => {
+        if (!root) return [];
+        const scaleNotes = getNotesInKey(root, scale);
+        const chords = [];
+        
+        const chordQualities = scale === 'major' 
+          ? ['maj', 'min', 'min', 'maj', 'maj', 'min', 'dim']
+          : ['min', 'dim', 'maj', 'min', 'min', 'maj', 'maj'];
+        
+        scaleNotes.forEach((note, idx) => {
+          chords.push({
+            root: note,
+            quality: chordQualities[idx],
+            numeral: scale === 'major' 
+              ? ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'][idx]
+              : ['i', 'ii°', 'III', 'iv', 'v', 'VI', 'VII'][idx]
+          });
+        });
+        
+        return chords;
+      };
+
+      const handleKeyChange = (root) => {
+        setSelectedKey(root);
+        if (root) {
+          const keyNotes = getNotesInKey(root, selectedScale);
+          setHighlightedNotes(keyNotes);
+          setChordLookup('');
+        } else {
+          setHighlightedNotes([]);
+        }
+      };
+
+      const handleScaleChange = (scale) => {
+        setSelectedScale(scale);
+        if (selectedKey) {
+          const keyNotes = getNotesInKey(selectedKey, scale);
+          setHighlightedNotes(keyNotes);
+        }
+      };
+
+      const selectChordFromKey = (chord) => {
+        const chordNotes = parseChord(`${chord.root}${chord.quality}`);
+        if (chordNotes) {
+          setHighlightedNotes(chordNotes);
+          setChordLookup(`${chord.root}${chord.quality}`);
+        }
+      };
+
+      const getSpikeCapoSuggestion = () => {
+        const currentTuning = getCurrentTuning();
+        const droneStringIdx = 0;
+        
+        const droneSelections = selectedNotes
+          .filter(key => key.startsWith(`${droneStringIdx}-`))
+          .map(key => parseInt(key.split('-')[1]));
+        
+        if (droneSelections.length === 0) return null;
+        
+        const maxFret = Math.max(...droneSelections);
+        const targetSpike = maxFret + 2;
+        const closestSpike = spikeCapoFrets.find(spike => spike >= targetSpike);
+        
+        if (closestSpike && maxFret >= 5) {
+          const actualFret = maxFret - 5;
+          const noteData = getNoteAtFret(currentTuning[droneStringIdx], actualFret);
+          return {
+            fret: closestSpike,
+            targetFret: maxFret,
+            note: noteData.note
+          };
+        }
+        
+        return null;
+      };
+
+      const toggleNote = (stringIdx, fret) => {
+        const key = `${stringIdx}-${fret}`;
+        setSelectedNotes(prev => 
+          prev.includes(key) 
+            ? prev.filter(n => n !== key)
+            : [...prev, key]
+        );
+      };
+
+      const clearSelection = () => {
+        setSelectedNotes([]);
+      };
+
+      const parseChord = (chordStr) => {
+        const chordPatterns = {
+          'maj': [0, 4, 7],
+          'major': [0, 4, 7],
+          'm': [0, 3, 7],
+          'min': [0, 3, 7],
+          'minor': [0, 3, 7],
+          'dim': [0, 3, 6],
+          'aug': [0, 4, 8],
+          'maj7': [0, 4, 7, 11],
+          'm7': [0, 3, 7, 10],
+          'min7': [0, 3, 7, 10],
+          '7': [0, 4, 7, 10],
+          'dom7': [0, 4, 7, 10],
+          'sus2': [0, 2, 7],
+          'sus4': [0, 5, 7],
+        };
+
+        const input = chordStr.trim().toLowerCase();
+        if (!input) return null;
+
+        let root = input[0].toUpperCase();
+        let remaining = input.slice(1);
+        
+        if (remaining[0] === '#' || remaining[0] === 'b') {
+          if (remaining[0] === 'b') {
+            const noteIdx = notes.indexOf(root);
+            root = notes[(noteIdx - 1 + 12) % 12];
+          } else {
+            root = root + '#';
+          }
+          remaining = remaining.slice(1);
+        }
+
+        if (!notes.includes(root)) return null;
+
+        const chordType = remaining.trim() || 'major';
+        const intervals = chordPatterns[chordType];
+        if (!intervals) return null;
+
+        const rootIdx = notes.indexOf(root);
+        const chordNotes = intervals.map(interval => notes[(rootIdx + interval) % 12]);
+        
+        return chordNotes;
+      };
+
+      const handleChordLookup = () => {
+        const chordNotes = parseChord(chordLookup);
+        if (chordNotes) {
+          setHighlightedNotes(chordNotes);
+          setSelectedNotes([]);
+        }
+      };
+
+      const clearChordHighlight = () => {
+        setHighlightedNotes([]);
+        setChordLookup('');
+        setSelectedKey('');
+      };
+
+      const addCustomTuning = () => {
+        if (!customTuningName.trim()) {
+          alert('Please enter a tuning name');
+          return;
+        }
+        
+        const isValid = customTuningNotes.every(note => {
+          const match = note.match(/^([A-G]#?)(\d)$/);
+          return match && notes.includes(match[1]) && parseInt(match[2]) >= 0 && parseInt(match[2]) <= 8;
+        });
+
+        if (!isValid) {
+          alert('Invalid tuning format. Use format like G2, D2, G2, B2, D3');
+          return;
+        }
+
+        const newTunings = { 
+          ...tunings, 
+          [customTuningName]: { 
+            tuning: customTuningNotes, 
+            spikeAt: null 
+          } 
+        };
+        setTunings(newTunings);
+        setSelectedTuning(customTuningName);
+        setShowCustomTuning(false);
+        setCustomTuningName('');
+      };
+
+      const updateCustomNote = (idx, value) => {
+        const newNotes = [...customTuningNotes];
+        newNotes[idx] = value.toUpperCase();
+        setCustomTuningNotes(newNotes);
+      };
+
+      const getSelectedNoteNames = () => {
+        const currentTuning = getCurrentTuning();
+        return selectedNotes.map(key => {
+          const [stringIdx, fret] = key.split('-').map(Number);
+          const isFirstString = stringIdx === 0;
+          const actualFret = isFirstString ? fret - 5 : fret;
+          const noteData = getNoteAtFret(currentTuning[stringIdx], actualFret);
+          return noteData.note;
+        }).filter((note, idx, arr) => arr.indexOf(note) === idx).sort((a, b) => 
+          notes.indexOf(a) - notes.indexOf(b)
+        );
+      };
+
+      const identifyChord = () => {
+        const selectedUniqueNotes = getSelectedNoteNames();
+        if (selectedUniqueNotes.length < 3) return 'Select at least 3 notes';
+
+        const chordPatterns = {
+          'Major': [0, 4, 7],
+          'Minor': [0, 3, 7],
+          'Diminished': [0, 3, 6],
+          'Augmented': [0, 4, 8],
+          'Major 7': [0, 4, 7, 11],
+          'Minor 7': [0, 3, 7, 10],
+          'Dominant 7': [0, 4, 7, 10],
+          'Sus2': [0, 2, 7],
+          'Sus4': [0, 5, 7],
+        };
+
+        for (let rootIdx = 0; rootIdx < 12; rootIdx++) {
+          const root = notes[rootIdx];
+          for (const [chordType, intervals] of Object.entries(chordPatterns)) {
+            const chordNotes = intervals.map(interval => notes[(rootIdx + interval) % 12]);
+            if (chordNotes.every(note => selectedUniqueNotes.includes(note)) &&
+                chordNotes.length === selectedUniqueNotes.length) {
+              return `${root} ${chordType}`;
+            }
+          }
+        }
+        return selectedUniqueNotes.join(', ');
+      };
+
+      const fretMarkers = [3, 5, 7, 10, 12, 15, 17, 19, 21];
+      const doubleDots = [12];
+
+      const commonProgressions = {
+        'major': [
+          { name: 'I-IV-V', chords: [0, 3, 4], description: 'Classic rock/blues' },
+          { name: 'I-V-vi-IV', chords: [0, 4, 5, 3], description: 'Pop progression' },
+          { name: 'ii-V-I', chords: [1, 4, 0], description: 'Jazz turnaround' },
+          { name: 'I-vi-IV-V', chords: [0, 5, 3, 4], description: '50s progression' },
+          { name: 'I-IV-I-V', chords: [0, 3, 0, 4], description: 'Folk/country' },
+        ],
+        'minor': [
+          { name: 'i-iv-v', chords: [0, 3, 4], description: 'Minor blues' },
+          { name: 'i-VI-VII', chords: [0, 5, 6], description: 'Andalusian cadence' },
+          { name: 'i-iv-VII-VI', chords: [0, 3, 6, 5], description: 'Rock minor' },
+          { name: 'i-III-VII-VI', chords: [0, 2, 6, 5], description: 'Epic progression' },
+        ],
+      };
+
+      const songExamples = {
+        'C': { major: ['Let It Be - Beatles', 'No Woman No Cry - Bob Marley', 'Imagine - John Lennon'], minor: ['Stairway to Heaven - Led Zeppelin', 'Losing My Religion - R.E.M.'] },
+        'C#': { major: ['Drops of Jupiter - Train'], minor: [] },
+        'D': { major: ['Wonderwall - Oasis', 'Free Fallin\' - Tom Petty', 'Blowin\' in the Wind - Bob Dylan'], minor: ['Scarborough Fair - Simon & Garfunkel', 'Zombie - The Cranberries'] },
+        'D#': { major: [], minor: ['Hurt - Johnny Cash'] },
+        'E': { major: ['Hey Jude - Beatles', 'Love Me Do - Beatles', 'Wagon Wheel - OCMS'], minor: ['Losing My Religion - R.E.M.', 'Sultans of Swing - Dire Straits'] },
+        'F': { major: ['I Will Always Love You - Whitney Houston', 'Hey Soul Sister - Train'], minor: ['All Along the Watchtower - Hendrix'] },
+        'F#': { major: ['Mr. Brightside - The Killers'], minor: ['Creep - Radiohead'] },
+        'G': { major: ['Sweet Home Alabama - Lynyrd Skynyrd', 'Knockin\' on Heaven\'s Door - Bob Dylan', 'Brown Eyed Girl - Van Morrison'], minor: ['While My Guitar Gently Weeps - Beatles'] },
+        'G#': { major: [], minor: ['Rolling in the Deep - Adele'] },
+        'A': { major: ['Free Bird - Lynyrd Skynyrd', 'I\'m Yours - Jason Mraz', 'You Are My Sunshine'], minor: ['Stairway to Heaven - Led Zeppelin', 'Hotel California - Eagles'] },
+        'A#': { major: [], minor: [] },
+        'B': { major: [], minor: [] },
+      };
+
+      const currentSpikeFret = getCurrentSpikeFret();
+
+      return (
+        <div className="w-full max-w-6xl mx-auto p-6 bg-gradient-to-br from-orange-100 via-amber-50 to-cyan-100">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 border-4 border-orange-200">
+            <div className="flex items-center gap-3 mb-6 pb-4 border-b-2 border-orange-200">
+              <Music className="w-8 h-8 text-orange-600" />
+              <h1 className="text-3xl font-bold bg-gradient-to-r from-orange-600 to-pink-500 bg-clip-text text-transparent">Banjo Hero</h1>
+            </div>
+
+            <div className="mb-6 flex gap-4 items-center flex-wrap">
+              <div>
+                <label className="block text-sm font-semibold text-orange-800 mb-2">Tuning:</label>
+                <select 
+                  value={selectedTuning}
+                  onChange={(e) => {
+                    setSelectedTuning(e.target.value);
+                    setSelectedNotes([]);
+                    setHighlightedNotes([]);
+                  }}
+                  className="px-4 py-2 border-2 border-orange-300 rounded-xl bg-white text-gray-800 font-medium shadow-sm hover:shadow-md transition-shadow"
+                >
+                  {Object.keys(tunings).map(tuning => (
+                    <option key={tuning} value={tuning}>{tuning}</option>
+                  ))}
+                </select>
+                {tuningNotes[selectedTuning] && (
+                  <div className="mt-2 text-xs font-semibold text-pink-700 bg-pink-50 px-3 py-1 rounded-lg border border-pink-200">
+                    ⚠️ {tuningNotes[selectedTuning]}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => setShowCustomTuning(!showCustomTuning)}
+                className="px-4 py-2 bg-gradient-to-r from-orange-400 to-pink-400 text-white rounded-xl hover:from-orange-500 hover:to-pink-500 font-medium mt-6 shadow-md hover:shadow-lg transition-all"
+              >
+                {showCustomTuning ? 'Cancel' : 'Add Custom Tuning'}
+              </button>
+              
+              <button
+                onClick={clearSelection}
+                className="px-4 py-2 bg-gradient-to-r from-red-400 to-rose-400 text-white rounded-xl hover:from-red-500 hover:to-rose-500 font-medium mt-6 shadow-md hover:shadow-lg transition-all"
+              >
+                Clear Selection
+              </button>
+
+              <button
+                onClick={showTuner ? stopTuner : startTuner}
+                className={`px-4 py-2 ${showTuner ? 'bg-gradient-to-r from-red-500 to-rose-500' : 'bg-gradient-to-r from-teal-400 to-cyan-500'} text-white rounded-xl hover:opacity-90 font-medium mt-6 shadow-md hover:shadow-lg transition-all`}
+              >
+                {showTuner ? '🎤 Close Tuner' : '🎵 Open Tuner'}
+              </button>
+            </div>
+
+            {showTuner && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full border-4 border-teal-300">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-semibold text-teal-900 text-center text-xl flex-1">Chromatic Tuner</h3>
+                    <button
+                      onClick={stopTuner}
+                      className="text-gray-500 hover:text-gray-700 text-2xl font-bold leading-none"
+                      aria-label="Close tuner"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  {isListening ? (
+                    <div className="text-center">
+                      <div className="mb-2 text-sm text-teal-700">
+                        🎤 Listening... Play a note
+                      </div>
+                      
+                      {/* Audio Level Indicator */}
+                      <div className="mb-4">
+                        <div className="text-xs text-teal-600 mb-1">Audio Level: {audioLevel.toFixed(1)}%</div>
+                        <div className="relative h-4 bg-gray-200 rounded-full overflow-hidden">
+                          <div 
+                            className="absolute left-0 top-0 h-full bg-gradient-to-r from-green-400 to-teal-500 transition-all duration-100"
+                            style={{ width: `${audioLevel}%` }}
+                          ></div>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {audioLevel > 5 ? '✓ Detecting audio' : '⚠️ No audio detected - try speaking or playing louder'}
+                        </div>
+                      </div>
+                      
+                      <div className="mb-4">
+                        <div className="text-6xl font-bold text-teal-800">
+                          {tunerNote || '...'}
+                        </div>
+                      </div>
+                      
+                      {/* Always show the tuning meter */}
+                      <div className="relative h-16 bg-white rounded-lg overflow-hidden border-2 border-teal-300 mb-4">
+                        <div 
+                          className="absolute top-0 bottom-0 w-1 bg-teal-600 transition-all duration-100"
+                          style={{ left: `calc(50% + ${Math.max(-50, Math.min(50, tunerCents)) * 0.5}%)` }}
+                        ></div>
+                        <div className="absolute top-0 bottom-0 w-0.5 bg-gray-400 left-1/2"></div>
+                        <div className="absolute inset-0 flex justify-between px-4 items-center">
+                          <span className="text-xs text-gray-500">-50</span>
+                          <span className="text-xs text-gray-500">0</span>
+                          <span className="text-xs text-gray-500">+50</span>
+                        </div>
+                      </div>
+                      
+                      {tunerNote && tunerNote !== '...' ? (
+                        <>
+                          <div className={`text-2xl font-bold ${
+                            Math.abs(tunerCents) < 5 ? 'text-green-600' :
+                            Math.abs(tunerCents) < 15 ? 'text-yellow-600' :
+                            'text-red-600'
+                          }`}>
+                            {tunerCents > 0 ? `+${tunerCents}` : tunerCents} cents
+                          </div>
+                          <div className="mt-2 text-sm text-teal-700">
+                            {Math.abs(tunerCents) < 5 ? '✓ In Tune!' :
+                             tunerCents > 0 ? '↑ Too Sharp' : '↓ Too Flat'}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-teal-600 text-sm">
+                          Waiting for clear pitch...
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center text-teal-700">Starting tuner...</div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {showCustomTuning && (
+              <div className="mb-6 p-4 bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-300 rounded-xl shadow-md">
+                <h3 className="font-semibold text-orange-900 mb-3">Add Custom Tuning</h3>
+                <div className="mb-3">
+                  <label className="block text-sm font-semibold text-orange-800 mb-1">Tuning Name:</label>
+                  <input
+                    type="text"
+                    value={customTuningName}
+                    onChange={(e) => setCustomTuningName(e.target.value)}
+                    placeholder="e.g., My Custom Tuning"
+                    className="px-3 py-2 border-2 border-orange-300 rounded-xl w-full max-w-xs"
+                  />
+                </div>
+                <div className="mb-3">
+                  <label className="block text-sm font-semibold text-orange-800 mb-1">Strings (format: G2, D2, G2, B2, D3):</label>
+                  <div className="flex gap-2 flex-wrap">
+                    {customTuningNotes.map((note, idx) => (
+                      <input
+                        key={idx}
+                        type="text"
+                        value={note}
+                        onChange={(e) => updateCustomNote(idx, e.target.value)}
+                        className="px-3 py-2 border-2 border-orange-300 rounded-xl w-16 text-center"
+                        placeholder={`String ${idx + 1}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={addCustomTuning}
+                  className="px-4 py-2 bg-gradient-to-r from-teal-400 to-cyan-500 text-white rounded-xl hover:from-teal-500 hover:to-cyan-600 font-medium shadow-md hover:shadow-lg transition-all"
+                >
+                  Add Tuning
+                </button>
+              </div>
+            )}
+
+            <div className="mb-6 p-4 bg-gradient-to-r from-cyan-50 to-teal-50 border-2 border-cyan-300 rounded-xl shadow-md">
+              <h3 className="font-semibold text-cyan-900 mb-3">Chord Lookup</h3>
+              <div className="flex gap-3 items-end flex-wrap">
+                <div>
+                  <label className="block text-sm font-semibold text-cyan-800 mb-1">
+                    Enter Chord (e.g., Cmaj, Dm, G7, Asus4):
+                  </label>
+                  <input
+                    type="text"
+                    value={chordLookup}
+                    onChange={(e) => setChordLookup(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleChordLookup()}
+                    placeholder="Cmaj"
+                    className="px-3 py-2 border-2 border-cyan-300 rounded-xl w-48"
+                  />
+                </div>
+                <button
+                  onClick={handleChordLookup}
+                  className="px-4 py-2 bg-gradient-to-r from-cyan-400 to-teal-500 text-white rounded-xl hover:from-cyan-500 hover:to-teal-600 font-medium shadow-md hover:shadow-lg transition-all"
+                >
+                  Find Chord
+                </button>
+                {highlightedNotes.length > 0 && (
+                  <button
+                    onClick={clearChordHighlight}
+                    className="px-4 py-2 bg-gradient-to-r from-gray-400 to-gray-500 text-white rounded-xl hover:from-gray-500 hover:to-gray-600 font-medium shadow-md hover:shadow-lg transition-all"
+                  >
+                    Clear Highlight
+                  </button>
+                )}
+              </div>
+              {highlightedNotes.length > 0 && !selectedKey && (
+                <div className="mt-3 text-cyan-800 font-medium">
+                  Highlighting: {highlightedNotes.join(', ')}
+                </div>
+              )}
+            </div>
+
+            <div className="mb-6 p-4 bg-gradient-to-r from-pink-50 to-rose-50 border-2 border-pink-300 rounded-xl shadow-md">
+              <h3 className="font-semibold text-pink-900 mb-3">Key Selector</h3>
+              <div className="flex gap-3 items-end flex-wrap mb-3">
+                <div>
+                  <label className="block text-sm font-semibold text-pink-800 mb-1">Key:</label>
+                  <select
+                    value={selectedKey}
+                    onChange={(e) => handleKeyChange(e.target.value)}
+                    className="px-3 py-2 border-2 border-pink-300 rounded-xl bg-white shadow-sm"
+                  >
+                    <option value="">Select a key...</option>
+                    {notes.map(note => (
+                      <option key={note} value={note}>{note}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-pink-800 mb-1">Scale:</label>
+                  <select
+                    value={selectedScale}
+                    onChange={(e) => handleScaleChange(e.target.value)}
+                    className="px-3 py-2 border-2 border-pink-300 rounded-xl bg-white shadow-sm"
+                  >
+                    {Object.keys(scaleIntervals).map(scale => (
+                      <option key={scale} value={scale}>{scale.charAt(0).toUpperCase() + scale.slice(1)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              {selectedKey && (
+                <>
+                  <div className="mb-3">
+                    <div className="font-semibold text-pink-900 mb-1">Notes in {selectedKey} {selectedScale}:</div>
+                    <div className="text-pink-800 font-medium">{getNotesInKey(selectedKey, selectedScale).join(', ')}</div>
+                  </div>
+                  
+                  <div className="mb-4">
+                    <div className="font-semibold text-pink-900 mb-2">Chords in {selectedKey} {selectedScale}:</div>
+                    <div className="flex gap-2 flex-wrap">
+                      {getChordsInKey(selectedKey, selectedScale).map((chord, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => selectChordFromKey(chord)}
+                          className="px-3 py-2 bg-gradient-to-br from-pink-200 to-rose-200 hover:from-pink-300 hover:to-rose-300 rounded-xl border-2 border-pink-400 transition-all shadow-sm hover:shadow-md"
+                        >
+                          <div className="text-xs text-pink-600 font-semibold">{chord.numeral}</div>
+                          <div className="text-sm font-bold text-pink-900">{chord.root}{chord.quality}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {commonProgressions[selectedScale] && (
+                    <div className="mb-4 p-3 bg-gradient-to-r from-pink-100 to-rose-100 rounded-xl border border-pink-200">
+                      <div className="font-semibold text-pink-900 mb-2">Common Progressions:</div>
+                      {commonProgressions[selectedScale].map((prog, idx) => {
+                        const chordNames = prog.chords.map(i => {
+                          const chord = getChordsInKey(selectedKey, selectedScale)[i];
+                          return `${chord.root}${chord.quality}`;
+                        }).join(' - ');
+                        return (
+                          <div key={idx} className="mb-2 text-sm">
+                            <span className="font-semibold text-pink-800">{prog.name}:</span>{' '}
+                            <span className="text-pink-700">{chordNames}</span>{' '}
+                            <span className="text-pink-600 italic">({prog.description})</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {songExamples[selectedKey] && songExamples[selectedKey][selectedScale].length > 0 && (
+                    <div className="p-3 bg-gradient-to-r from-pink-100 to-rose-100 rounded-xl border border-pink-200">
+                      <div className="font-semibold text-pink-900 mb-2">Songs in {selectedKey} {selectedScale}:</div>
+                      <div className="text-sm text-pink-700 font-medium">
+                        {songExamples[selectedKey][selectedScale].join(' • ')}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="mb-4 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300 rounded-xl shadow-md">
+              <div className="font-semibold text-orange-900 mb-2">Selected Notes:</div>
+              <div className="text-lg text-orange-800 font-medium">{getSelectedNoteNames().join(', ') || 'None'}</div>
+              <div className="font-semibold text-orange-900 mt-2">Chord:</div>
+              <div className="text-lg text-orange-800 font-medium">{identifyChord()}</div>
+              {getSpikeCapoSuggestion() && (
+                <div className="mt-3 p-3 bg-gradient-to-r from-yellow-100 to-orange-100 rounded-xl border-2 border-yellow-400 shadow-sm">
+                  <div className="font-semibold text-orange-900">🎯 Spike Capo Suggestion:</div>
+                  <div className="text-orange-800 font-medium">
+                    Use spike at fret {getSpikeCapoSuggestion().fret} to reach {getSpikeCapoSuggestion().note} at fret {getSpikeCapoSuggestion().targetFret}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="overflow-x-auto">
+              <div className="inline-block min-w-full">
+                {/* Fret markers */}
+                <div className="flex mb-2">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => (
+                    <div key={fret} className="w-12 text-center">
+                      {fretMarkers.includes(fret) && (
+                        <div className="flex justify-center gap-1">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                          {doubleDots.includes(fret) && (
+                            <div className="w-2 h-2 bg-gray-400 rounded-full"></div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Fretboard */}
+                {[...getCurrentTuning()].reverse().map((stringNote, reversedIdx) => {
+                  const currentTuning = getCurrentTuning();
+                  const stringIdx = currentTuning.length - 1 - reversedIdx;
+                  const isFirstString = stringIdx === 0;
+                  const startFret = isFirstString ? 5 : 0;
+                  
+                  return (
+                    <div key={stringIdx} className="flex items-center mb-1">
+                      <div className="w-24 text-right pr-4 font-semibold text-gray-700">
+                        {stringNote}
+                      </div>
+                      {[...Array(numFrets + 1)].map((_, fret) => {
+                        if (isFirstString && fret < startFret) {
+                          return (
+                            <div key={fret} className="relative w-12 h-12">
+                              <div className="w-full h-full border-r-2 border-transparent"></div>
+                            </div>
+                          );
+                        }
+                        
+                        const actualFret = isFirstString ? fret - startFret : fret;
+                        const noteData = getNoteAtFret(stringNote, actualFret);
+                        const isSelected = selectedNotes.includes(`${stringIdx}-${fret}`);
+                        const isHighlighted = highlightedNotes.includes(noteData.note);
+                        
+                        return (
+                          <div key={fret} className="relative w-12 h-12">
+                            <button
+                              onClick={() => toggleNote(stringIdx, fret)}
+                              className={`w-full h-full border-r-2 border-orange-300 relative ${
+                                isSelected 
+                                  ? 'bg-gradient-to-br from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 shadow-md' 
+                                  : isHighlighted
+                                  ? 'bg-gradient-to-br from-cyan-300 to-teal-400 hover:from-cyan-400 hover:to-teal-500 shadow-md'
+                                  : 'bg-gradient-to-br from-orange-50 to-amber-50 hover:from-orange-100 hover:to-amber-100'
+                              } transition-all rounded-sm`}
+                            >
+                              <span className={`text-xs font-semibold ${
+                                isSelected || isHighlighted ? 'text-white drop-shadow' : 'text-gray-700'
+                              }`}>
+                                {noteData.note}
+                              </span>
+                            </button>
+                            {fret < numFrets && (
+                              <div className={`absolute top-1/2 left-full w-0 h-0.5 ${
+                                stringIdx === 0 ? 'bg-orange-300' :
+                                stringIdx === 1 ? 'bg-orange-400' :
+                                stringIdx === 2 ? 'bg-orange-500' :
+                                stringIdx === 3 ? 'bg-orange-600' :
+                                'bg-orange-700'
+                              }`} style={{ width: '3rem', transform: 'translateY(-50%)' }}></div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+                {/* Fret numbers */}
+                <div className="flex mt-2">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => (
+                    <div key={fret} className="w-12 text-center text-xs text-gray-500 font-medium">
+                      {fret}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Spike capo markers - ONLY on drone string row */}
+                <div className="flex mt-1">
+                  <div className="w-24"></div>
+                  {[...Array(numFrets + 1)].map((_, fret) => {
+                    const showActiveSpike = currentSpikeFret && fret === currentSpikeFret;
+                    const showAvailableSpike = spikeCapoFrets.includes(fret) && !currentSpikeFret;
+                    return (
+                      <div key={fret} className="w-12 text-center">
+                        {(showActiveSpike || showAvailableSpike) && (
+                          <div className={`text-base font-bold drop-shadow ${
+                            showActiveSpike ? 'text-pink-700' : 'text-pink-600'
+                          }`}>
+                            {showActiveSpike ? '🎯' : '▲'}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Spike Capo Selector */}
+            <div className="mt-6 p-4 bg-gradient-to-r from-orange-50 to-pink-50 border-2 border-orange-300 rounded-xl shadow-md">
+              <label className="block text-sm font-semibold text-orange-800 mb-2">
+                Spike Capo Frets (for drone string):
+              </label>
+              <div className="flex gap-2 flex-wrap">
+                {[5, 7, 9, 10, 12, 14, 15, 17, 19].map(fret => (
+                  <button
+                    key={fret}
+                    onClick={() => {
+                      setSpikeCapoFrets(prev => 
+                        prev.includes(fret) 
+                          ? prev.filter(f => f !== fret)
+                          : [...prev, fret].sort((a, b) => a - b)
+                      );
+                    }}
+                    className={`px-3 py-1 rounded-lg ${
+                      spikeCapoFrets.includes(fret)
+                        ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md'
+                        : 'bg-orange-100 text-orange-800 border border-orange-300'
+                    } text-sm font-medium hover:opacity-80 transition-all`}
+                  >
+                    {fret}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Render the app with React 18 API
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<CelloBanjoFretboard />);
+</script>
+```
+
+</body>
+</html>
