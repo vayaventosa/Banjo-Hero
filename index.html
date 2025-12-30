@@ -38,7 +38,7 @@
 
 ```
 <script type="text/babel">
-    const { useState } = React;
+    const { useState, useEffect, useRef } = React;
 
     // Music icon component
     const Music = ({ className }) => (
@@ -87,11 +87,6 @@
       };
 
       // Tuner functionality
-      let audioContext = null;
-      let analyser = null;
-      let microphone = null;
-      let rafId = null;
-
       const noteFrequencies = {
         'C': 16.35, 'C#': 17.32, 'D': 18.35, 'D#': 19.45, 'E': 20.60,
         'F': 21.83, 'F#': 23.12, 'G': 24.50, 'G#': 25.96, 'A': 27.50, 'A#': 29.14, 'B': 30.87
@@ -168,13 +163,13 @@
       };
 
       const updatePitch = () => {
-        if (!analyser || !isListening) return;
+        if (!analyserRef.current || !isListening) return;
 
-        const bufferLength = analyser.fftSize;
+        const bufferLength = analyserRef.current.fftSize;
         const buffer = new Float32Array(bufferLength);
-        analyser.getFloatTimeDomainData(buffer);
+        analyserRef.current.getFloatTimeDomainData(buffer);
 
-        const frequency = autoCorrelate(buffer, audioContext.sampleRate);
+        const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
 
         if (frequency > -1 && frequency > 20 && frequency < 2000) {
           const noteInfo = frequencyToNote(frequency);
@@ -182,18 +177,18 @@
           setTunerCents(noteInfo.cents);
         }
 
-        rafId = requestAnimationFrame(updatePitch);
+        rafIdRef.current = requestAnimationFrame(updatePitch);
       };
 
       const startTuner = async () => {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          audioContext = new (window.AudioContext || window.webkitAudioContext)();
-          analyser = audioContext.createAnalyser();
-          microphone = audioContext.createMediaStreamSource(stream);
-          analyser.fftSize = 2048;
+          audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          analyserRef.current = audioContextRef.current.createAnalyser();
+          microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
+          analyserRef.current.fftSize = 2048;
           
-          microphone.connect(analyser);
+          microphoneRef.current.connect(analyserRef.current);
           setIsListening(true);
           setShowTuner(true);
           updatePitch();
@@ -204,23 +199,32 @@
       };
 
       const stopTuner = () => {
-        if (rafId) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
+        if (rafIdRef.current) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
         }
-        if (microphone) {
-          microphone.disconnect();
-          microphone = null;
+        if (microphoneRef.current) {
+          microphoneRef.current.disconnect();
+          microphoneRef.current = null;
         }
-        if (audioContext) {
-          audioContext.close();
-          audioContext = null;
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
         }
         setIsListening(false);
         setShowTuner(false);
         setTunerNote(null);
         setTunerCents(0);
       };
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => {
+          if (isListening) {
+            stopTuner();
+          }
+        };
+      }, []);
 
       const [tunings, setTunings] = useState(defaultTunings);
       const [selectedTuning, setSelectedTuning] = useState('Open G (gDGBD)');
@@ -238,6 +242,12 @@
       const [tunerCents, setTunerCents] = useState(0);
       const [isListening, setIsListening] = useState(false);
       const numFrets = 22;
+
+      // Audio refs for tuner
+      const audioContextRef = useRef(null);
+      const analyserRef = useRef(null);
+      const microphoneRef = useRef(null);
+      const rafIdRef = useRef(null);
 
       const scaleIntervals = {
         'major': [0, 2, 4, 5, 7, 9, 11],
