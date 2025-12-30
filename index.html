@@ -225,6 +225,9 @@
         }
         rms = Math.sqrt(rms / buffer.length);
         
+        // Update audio level state for visual indicator (scale to 0-100)
+        setAudioLevel(Math.min(100, rms * 1000));
+        
         console.log('Audio level (RMS):', rms.toFixed(4));
 
         const frequency = autoCorrelate(buffer, audioContextRef.current.sampleRate);
@@ -258,11 +261,18 @@
           
           audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
           console.log('Audio context created, state:', audioContextRef.current.state);
+          
+          // Resume audio context if suspended (required on iOS/Safari)
+          if (audioContextRef.current.state === 'suspended') {
+            await audioContextRef.current.resume();
+            console.log('Audio context resumed, new state:', audioContextRef.current.state);
+          }
+          
           console.log('Sample rate:', audioContextRef.current.sampleRate);
           
           analyserRef.current = audioContextRef.current.createAnalyser();
           analyserRef.current.fftSize = 4096;
-          analyserRef.current.smoothingTimeConstant = 0.8;
+          analyserRef.current.smoothingTimeConstant = 0.3; // Less smoothing for more responsive detection
           console.log('Analyser created with fftSize:', analyserRef.current.fftSize);
           
           microphoneRef.current = audioContextRef.current.createMediaStreamSource(stream);
@@ -345,6 +355,7 @@
       const [tunerNote, setTunerNote] = useState(null);
       const [tunerCents, setTunerCents] = useState(0);
       const [isListening, setIsListening] = useState(false);
+      const [audioLevel, setAudioLevel] = useState(0);
       const numFrets = 22;
 
       const audioContextRef = useRef(null);
@@ -698,6 +709,18 @@
                     <div className="mb-2 text-sm text-teal-700">
                       🎤 Listening... Play a note
                     </div>
+                    
+                    {/* Audio Level Indicator */}
+                    <div className="mb-4">
+                      <div className="text-xs text-teal-600 mb-1">Audio Level:</div>
+                      <div className="relative h-4 bg-gray-200 rounded-full overflow-hidden">
+                        <div 
+                          className="absolute left-0 top-0 h-full bg-gradient-to-r from-green-400 to-teal-500 transition-all duration-100"
+                          style={{ width: `${audioLevel}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                    
                     <div className="mb-4">
                       <div className="text-6xl font-bold text-teal-800">
                         {tunerNote || '...'}
