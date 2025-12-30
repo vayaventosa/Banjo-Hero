@@ -67,30 +67,48 @@
         return { note: notes[newNoteIndex], octave: octave + octaveShift };
       };
 
-      // Generate tunings with correct spike capo note names
+      // Generate tunings with correct display names
       const generateDefaultTunings = () => {
         const baseTunings = {
-          'Open G': { base: 'gDGBD', tuning: ['G2', 'D2', 'G2', 'B2', 'D3'] },
-          'Sawmill': { base: 'gDGCD', tuning: ['G2', 'D2', 'G2', 'C3', 'D3'] },
-          'Open A': { base: 'gEAC#E', tuning: ['G2', 'E2', 'A2', 'C#3', 'E3'], spikeAt: 9 },
-          'Open C': { base: 'gCGCE', tuning: ['G2', 'C2', 'G2', 'C3', 'E3'] },
-          'Open D': { base: 'gDADF#', tuning: ['G2', 'D2', 'A2', 'D3', 'F#3'], spikeAt: 7 },
+          'Open G': { 
+            display: 'Open G (gDGBD)', 
+            tuning: ['G2', 'D2', 'G2', 'B2', 'D3'],
+            spikeAt: null
+          },
+          'Open A': { 
+            display: 'Open A (aEAC#E)', 
+            tuning: ['G2', 'E2', 'A2', 'C#3', 'E3'], 
+            spikeAt: 9 
+          },
+          'Open D': { 
+            display: 'Open D (aDF#AD)', 
+            tuning: ['G2', 'D2', 'F#2', 'A2', 'D3'], 
+            spikeAt: 9 
+          },
+          'Double C': { 
+            display: 'Double C (gCGCD)', 
+            tuning: ['G2', 'C2', 'G2', 'C3', 'D3'],
+            spikeAt: null
+          },
+          'G Modal - Sawmill': { 
+            display: 'G Modal - Sawmill (gDGCD)', 
+            tuning: ['G2', 'D2', 'G2', 'C3', 'D3'],
+            spikeAt: null
+          },
+          'D Modal': { 
+            display: 'D Modal (aDGAD)', 
+            tuning: ['G2', 'D2', 'G2', 'A2', 'D3'], 
+            spikeAt: 9 
+          },
         };
 
         const allTunings = {};
         
         Object.entries(baseTunings).forEach(([name, data]) => {
-          const { base, tuning, spikeAt } = data;
-          
-          if (spikeAt) {
-            // Calculate what note the drone string would be at this fret
-            const droneAtSpike = getNoteAtFret('G2', spikeAt);
-            const displayName = `${name} (${droneAtSpike.note}${base.substring(1)}) - spike@${spikeAt}`;
-            allTunings[displayName] = tuning;
-          } else {
-            const displayName = `${name} (${base})`;
-            allTunings[displayName] = tuning;
-          }
+          allTunings[data.display] = { 
+            tuning: data.tuning, 
+            spikeAt: data.spikeAt 
+          };
         });
         
         return allTunings;
@@ -99,14 +117,15 @@
       const defaultTunings = generateDefaultTunings();
 
       const tuningNotes = {
-        'Open A (A EAC#E) - spike@9': 'Spike capo G string at fret 9 to reach A',
-        'Open D (D DAF#) - spike@7': 'Spike capo G string at fret 7 to reach D',
+        'Open A (aEAC#E)': 'Spike capo G string at fret 9 to reach A',
+        'Open D (aDF#AD)': 'Spike capo G string at fret 9 to reach A',
+        'D Modal (aDGAD)': 'Spike capo G string at fret 9 to reach A',
       };
 
       // Calculate which fret the drone string is spiked to for current tuning
       const getCurrentSpikeFret = () => {
-        const match = selectedTuning.match(/spike@(\d+)/);
-        return match ? parseInt(match[1]) : null;
+        const tuningData = tunings[selectedTuning];
+        return tuningData?.spikeAt || null;
       };
 
       // Tuner functionality
@@ -273,6 +292,12 @@
       const microphoneRef = useRef(null);
       const rafIdRef = useRef(null);
 
+      // Helper to get actual tuning array
+      const getCurrentTuning = () => {
+        const tuningData = tunings[selectedTuning];
+        return tuningData?.tuning || tuningData || [];
+      };
+
       const scaleIntervals = {
         'major': [0, 2, 4, 5, 7, 9, 11],
         'minor': [0, 2, 3, 5, 7, 8, 10],
@@ -339,7 +364,7 @@
       };
 
       const getSpikeCapoSuggestion = () => {
-        const currentTuning = tunings[selectedTuning];
+        const currentTuning = getCurrentTuning();
         const droneStringIdx = 0;
         
         const droneSelections = selectedNotes
@@ -454,7 +479,13 @@
           return;
         }
 
-        const newTunings = { ...tunings, [customTuningName]: customTuningNotes };
+        const newTunings = { 
+          ...tunings, 
+          [customTuningName]: { 
+            tuning: customTuningNotes, 
+            spikeAt: null 
+          } 
+        };
         setTunings(newTunings);
         setSelectedTuning(customTuningName);
         setShowCustomTuning(false);
@@ -468,7 +499,7 @@
       };
 
       const getSelectedNoteNames = () => {
-        const currentTuning = tunings[selectedTuning];
+        const currentTuning = getCurrentTuning();
         return selectedNotes.map(key => {
           const [stringIdx, fret] = key.split('-').map(Number);
           const isFirstString = stringIdx === 0;
@@ -843,8 +874,9 @@
                 </div>
 
                 {/* Fretboard */}
-                {[...tunings[selectedTuning]].reverse().map((stringNote, reversedIdx) => {
-                  const stringIdx = tunings[selectedTuning].length - 1 - reversedIdx;
+                {[...getCurrentTuning()].reverse().map((stringNote, reversedIdx) => {
+                  const currentTuning = getCurrentTuning();
+                  const stringIdx = currentTuning.length - 1 - reversedIdx;
                   const isFirstString = stringIdx === 0;
                   const startFret = isFirstString ? 5 : 0;
                   
