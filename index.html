@@ -441,26 +441,43 @@ const CelloBanjoFretboard = () => {
   };
 
   const getChordsInKey = (root, scale) => {
-    if (!root) return [];
-    const scaleNotes = getNotesInKey(root, scale);
-    const chords = [];
-    
-    const chordQualities = scale === 'major' 
-      ? ['maj', 'min', 'min', 'maj', 'maj', 'min', 'dim']
-      : ['min', 'dim', 'maj', 'min', 'min', 'maj', 'maj'];
-    
-    scaleNotes.forEach((note, idx) => {
-      chords.push({
-        root: note,
-        quality: chordQualities[idx],
-        numeral: scale === 'major' 
-          ? ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'][idx]
-          : ['i', 'ii°', 'III', 'iv', 'v', 'VI', 'VII'][idx]
-      });
-    });
-    
-    return chords;
+  if (!root) return [];
+  const scaleNotes = getNotesInKey(root, scale);
+  const chords = [];
+  
+  // Define chord qualities for each scale type
+  const chordQualityMap = {
+    'major': ['maj', 'min', 'min', 'maj', 'maj', 'min', 'dim'],
+    'minor': ['min', 'dim', 'maj', 'min', 'min', 'maj', 'maj'],
+    'harmonic minor': ['min', 'dim', 'aug', 'min', 'maj', 'maj', 'dim'],
+    'melodic minor': ['min', 'min', 'aug', 'maj', 'maj', 'dim', 'dim'],
+    'dorian': ['min', 'min', 'maj', 'maj', 'min', 'dim', 'maj'],
+    'mixolydian': ['maj', 'min', 'dim', 'maj', 'min', 'min', 'maj']
   };
+  
+  const numeralMap = {
+    'major': ['I', 'ii', 'iii', 'IV', 'V', 'vi', 'vii°'],
+    'minor': ['i', 'ii°', 'III', 'iv', 'v', 'VI', 'VII'],
+    'harmonic minor': ['i', 'ii°', 'III+', 'iv', 'V', 'VI', 'vii°'],
+    'melodic minor': ['i', 'ii', 'III+', 'IV', 'V', 'vi°', 'vii°'],
+    'dorian': ['i', 'ii', 'III', 'IV', 'v', 'vi°', 'VII'],
+    'mixolydian': ['I', 'ii', 'iii°', 'IV', 'v', 'vi', 'VII']
+  };
+  
+  const chordQualities = chordQualityMap[scale] || chordQualityMap['major'];
+  const numerals = numeralMap[scale] || numeralMap['major'];
+  
+  scaleNotes.forEach((note, idx) => {
+    chords.push({
+      root: note,
+      quality: chordQualities[idx],
+      numeral: numerals[idx]
+    });
+  });
+  
+      return chords;
+    };
+
 
   const handleKeyChange = (root) => {
     setSelectedKey(root);
