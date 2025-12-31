@@ -235,12 +235,8 @@ const CelloBanjoFretboard = () => {
 
     return frequency;
   };
-    // --- RMS hysteresis + stable display (prevents flicker near threshold) ---
-    // Start detecting only after we cross START; keep detecting until we fall below STOP.
-
-      
-  const RMS_START = 0.0040; // increase sensitivity by lowering this; higher = less sensitive
-  const RMS_STOP  = 0.001; // must be < RMS_START (hysteresis band
+  const RMS_START = 0.0040;
+  const RMS_STOP  = 0.0010;
   const updatePitch = () => {
     if (!analyserRef.current || !isListeningRef.current) {
       console.log('UpdatePitch stopped - analyser:', !!analyserRef.current, 'isListening:', isListeningRef.current);
@@ -251,35 +247,32 @@ const CelloBanjoFretboard = () => {
     const buffer = new Float32Array(bufferLength);
     analyserRef.current.getFloatTimeDomainData(buffer);
 
-    // Calculate RMS to check if we're getting 
-        let rms = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          rms += buffer[i] * buffer[i];
-        }
-        rms = Math.sqrt(rms / buffer.length);
+    // Calculate RMS to check if we're getting audio
+    let rms = 0;
+    for (let i = 0; i < buffer.length; i++) {
+      rms += buffer[i] * buffer[i];
+    }
+    rms = Math.sqrt(rms / buffer.length);
+    
+    // Update audio level state for visual indicator (scale to 0-100)
+    setAudioLevel(Math.min(100, rms * 1000));
+    
+    console.log('Audio level (RMS):', rms.toFixed(4));
 
-        // Audio level state for your UI indicator
-        setAudioLevel(Math.min(100, rms * 1000));
-        console.log('Audio level (RMS):', rms.toFixed(4));
+    const gateOpen = isListeningRef.current === true && (window.__tunerGateOpen ?? false);
+    let nextGateOpen = gateOpen;
 
-        // Hysteresis gate: prevents rapid on/off around a single threshold
-        // Uses isListeningRef.current as the "gate open" flag (no new state needed).
-        const gateOpen = isListeningRef.current === true && (window.__tunerGateOpen ?? false);
-        let nextGateOpen = gateOpen;
+    if (!gateOpen && rms >= RMS_START) nextGateOpen = true;
+    if (gateOpen && rms <= RMS_STOP) nextGateOpen = false;
 
-        if (!gateOpen && rms >= RMS_START) nextGateOpen = true;
-        if (gateOpen && rms <= RMS_STOP) nextGateOpen = false;
+    window.__tunerGateOpen = nextGateOpen;
 
-        window.__tunerGateOpen = nextGateOpen;
-
-        // If gate is closed, keep last stable reading instead of blanking (cleaner UX).
-        if (!nextGateOpen) {
-          // OPTIONAL: if you *want* it to show "..." when quiet, uncomment next 2 lines:
-          // setTunerNote('...');
-          // setTunerCents(0);
-        rafIdRef.current = requestAnimationFrame(          
-        return;
-
+    if (!nextGateOpen) {
+    // optional: show "..." when quiet
+    // setTunerNote('...');
+    // setTunerCents(0);
+    rafIdRef.current = requestAnimationFrame(updatePitch);
+    return;
     }
 
     // Null-guard sampleRate to avoid race condition crashes
